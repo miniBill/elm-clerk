@@ -1,0 +1,76 @@
+module Environment exposing (addFunction, addValue, call, empty, with)
+
+import Elm.Syntax.Expression exposing (FunctionImplementation)
+import Elm.Syntax.ModuleName exposing (ModuleName)
+import Elm.Syntax.Node as Node
+import FastDict as Dict
+import Types exposing (Env, EnvValues, Value)
+
+
+addValue : String -> Value -> Env -> Env
+addValue name value env =
+    { currentModule = env.currentModule
+    , callStack = env.callStack
+    , functions = env.functions
+    , values = Dict.insert name value env.values
+    , imports = env.imports
+    , moduleImports = env.moduleImports
+    }
+
+
+addFunction : ModuleName -> FunctionImplementation -> Env -> Env
+addFunction moduleName function env =
+    { currentModule = env.currentModule
+    , callStack = env.callStack
+    , functions =
+        Dict.insert
+            moduleName
+            (Dict.insert (Node.value function.name)
+                function
+                (Maybe.withDefault Dict.empty
+                    (Dict.get moduleName env.functions)
+                )
+            )
+            env.functions
+    , values = env.values
+    , imports = env.imports
+    , moduleImports = env.moduleImports
+    }
+
+
+with : EnvValues -> Env -> Env
+with newValues old =
+    { currentModule = old.currentModule
+    , callStack = old.callStack
+    , functions = old.functions
+    , imports = old.imports
+    , moduleImports = old.moduleImports
+    , values = Dict.union newValues old.values
+    }
+
+
+empty : ModuleName -> Env
+empty moduleName =
+    { currentModule = moduleName
+    , callStack = []
+    , functions = Dict.empty
+    , values = Dict.empty
+    , imports = Types.emptyImports
+    , moduleImports = Dict.empty
+    }
+
+
+call : ModuleName -> String -> Env -> Env
+call moduleName name env =
+    { currentModule = moduleName
+    , callStack =
+        { moduleName = moduleName, name = name }
+            :: env.callStack
+    , functions = env.functions
+    , values = env.values
+    , moduleImports = env.moduleImports
+    , imports =
+        Dict.get moduleName env.moduleImports
+            -- If it's missing it's probably some kernel module, so the imports don't really matter here
+            |> Maybe.withDefault env.imports
+    }

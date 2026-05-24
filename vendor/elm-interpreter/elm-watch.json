@@ -1,0 +1,11 @@
+{
+    "targets": {
+        "UI": {
+            "inputs": [
+                "src/UI.elm"
+            ],
+            "output": "dist/ui.js"
+        }
+    },
+    "serve": "."
+}

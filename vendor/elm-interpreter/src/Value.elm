@@ -1,0 +1,355 @@
+module Value exposing (eqValue, fromOrder, gtValue, ltValue, nameError, nothingValue, toArray, toExpression, toOrder, toString, todo, typeError, unsupported)
+
+import Array exposing (Array)
+import Elm.Syntax.Expression as Expression exposing (Expression)
+import Elm.Syntax.Node as Node exposing (Node)
+import FastDict as Dict
+import Types exposing (Env, EvalErrorData, EvalErrorKind(..), Value(..))
+
+
+typeError : Env -> String -> EvalErrorData
+typeError env msg =
+    error env (TypeError msg)
+
+
+nameError : Env -> String -> EvalErrorData
+nameError env msg =
+    error env (NameError msg)
+
+
+unsupported : Env -> String -> EvalErrorData
+unsupported env msg =
+    error env (Unsupported msg)
+
+
+todo : Env -> String -> EvalErrorData
+todo env msg =
+    error env (Todo msg)
+
+
+error : Env -> EvalErrorKind -> EvalErrorData
+error env msg =
+    { currentModule = env.currentModule
+    , callStack = env.callStack
+    , error = msg
+    }
+
+
+toExpression : Value -> Node Expression
+toExpression value =
+    Node.empty <|
+        case value of
+            String s ->
+                Expression.Literal s
+
+            Int i ->
+                Expression.Integer i
+
+            Float f ->
+                Expression.Floatable f
+
+            Char c ->
+                Expression.CharLiteral c
+
+            Bool b ->
+                Expression.FunctionOrValue [] (boolToString b)
+
+            Unit ->
+                Expression.UnitExpr
+
+            Tuple l r ->
+                Expression.TupledExpression
+                    [ toExpression l
+                    , toExpression r
+                    ]
+
+            Triple l m r ->
+                Expression.TupledExpression
+                    [ toExpression l
+                    , toExpression m
+                    , toExpression r
+                    ]
+
+            Record fields ->
+                fields
+                    |> Dict.toList
+                    |> List.map
+                        (\( fieldName, fieldValue ) ->
+                            Node.empty ( Node.empty fieldName, toExpression fieldValue )
+                        )
+                    |> Expression.RecordExpr
+
+            List list ->
+                list
+                    |> List.map toExpression
+                    |> Expression.ListExpr
+
+            Custom name args ->
+                case toArray value of
+                    Just array ->
+                        arrayToExpression "Array" array
+
+                    Nothing ->
+                        (Node.empty (Expression.FunctionOrValue name.moduleName name.name)
+                            :: List.map toExpression args
+                        )
+                            |> Expression.Application
+
+            JsArray array ->
+                arrayToExpression "JsArray" (Array.toList array)
+
+            PartiallyApplied _ [] _ (Just qualifiedName) _ ->
+                Expression.FunctionOrValue qualifiedName.moduleName qualifiedName.name
+
+            PartiallyApplied _ args _ (Just qualifiedName) _ ->
+                (Node.empty
+                    (Expression.FunctionOrValue
+                        qualifiedName.moduleName
+                        qualifiedName.name
+                    )
+                    :: List.map toExpression args
+                )
+                    |> Expression.Application
+
+            PartiallyApplied _ [] patterns Nothing implementation ->
+                Expression.LambdaExpression
+                    { args = patterns
+                    , expression = implementation
+                    }
+
+            PartiallyApplied _ args patterns Nothing implementation ->
+                (Node.empty
+                    (Expression.LambdaExpression
+                        { args = patterns
+                        , expression = implementation
+                        }
+                    )
+                    :: List.map toExpression args
+                )
+                    |> Expression.Application
+
+
+arrayToExpression : String -> List Value -> Expression
+arrayToExpression name array =
+    Expression.Application
+        [ Expression.FunctionOrValue
+            [ name ]
+            "fromList"
+            |> Node.empty
+        , array
+            |> List
+            |> toExpression
+        ]
+
+
+toArray : Value -> Maybe (List Value)
+toArray value =
+    case value of
+        Custom name [ _, _, JsArray tree, JsArray tailArray ] ->
+            case ( name.moduleName, name.name ) of
+                ( [ "Array" ], "Array_elm_builtin" ) ->
+                    let
+                        treeToArray : Array Value -> List Value
+                        treeToArray arr =
+                            Array.foldr (\e a -> nodeToList e ++ a) [] arr
+
+                        nodeToList : Value -> List Value
+                        nodeToList node =
+                            case node of
+                                Custom qualifiedName [ JsArray arr ] ->
+                                    case qualifiedName.name of
+                                        "SubTree" ->
+                                            treeToArray arr
+
+                                        "Leaf" ->
+                                            Array.toList arr
+
+                                        _ ->
+                                            []
+
+                                _ ->
+                                    []
+                    in
+                    Just (treeToArray tree ++ Array.toList tailArray)
+
+                _ ->
+                    Nothing
+
+        _ ->
+            Nothing
+
+
+boolToString : Bool -> String
+boolToString b =
+    if b then
+        "True"
+
+    else
+        "False"
+
+
+toString : Value -> String
+toString value =
+    case value of
+        String s ->
+            "\"" ++ escapeString s ++ "\""
+
+        Int i ->
+            String.fromInt i
+
+        Float f ->
+            String.fromFloat f
+
+        Char c ->
+            "'" ++ escapeChar c ++ "'"
+
+        Bool True ->
+            "True"
+
+        Bool False ->
+            "False"
+
+        Unit ->
+            "()"
+
+        Tuple l r ->
+            "(" ++ toString l ++ "," ++ toString r ++ ")"
+
+        Triple l m r ->
+            "(" ++ toString l ++ "," ++ toString m ++ "," ++ toString r ++ ")"
+
+        Record fields ->
+            case Dict.toList fields of
+                [] ->
+                    "{}"
+
+                pairs ->
+                    "{ " ++ String.join ", " (List.map (\( k, v ) -> k ++ " = " ++ toString v) pairs) ++ " }"
+
+        List items ->
+            "[" ++ String.join "," (List.map toString items) ++ "]"
+
+        Custom name args ->
+            case toArray value of
+                Just array ->
+                    "Array.fromList [" ++ String.join "," (List.map toString array) ++ "]"
+
+                Nothing ->
+                    case args of
+                        [] ->
+                            name.name
+
+                        _ ->
+                            name.name ++ " " ++ String.join " " (List.map toStringParens args)
+
+        JsArray arr ->
+            "[" ++ String.join "," (List.map toString (Array.toList arr)) ++ "]"
+
+        PartiallyApplied _ _ _ _ _ ->
+            "<function>"
+
+
+toStringParens : Value -> String
+toStringParens value =
+    case value of
+        Custom _ (_ :: _) ->
+            "(" ++ toString value ++ ")"
+
+        Int i ->
+            if i < 0 then
+                "(" ++ String.fromInt i ++ ")"
+
+            else
+                String.fromInt i
+
+        Float f ->
+            if f < 0 then
+                "(" ++ String.fromFloat f ++ ")"
+
+            else
+                String.fromFloat f
+
+        _ ->
+            toString value
+
+
+escapeString : String -> String
+escapeString s =
+    s
+        |> String.replace "\\" "\\\\"
+        |> String.replace "\"" "\\\""
+        |> String.replace "\n" "\\n"
+        |> String.replace "\u{000D}" "\\r"
+        |> String.replace "\t" "\\t"
+
+
+escapeChar : Char -> String
+escapeChar c =
+    case c of
+        '\\' ->
+            "\\\\"
+
+        '\'' ->
+            "\\'"
+
+        _ ->
+            String.fromChar c
+
+
+{-| Pre-computed Order values. Avoids allocating QualifiedNameRef + Custom
+on every comparison result (millions of times in fuzz tests).
+-}
+ltValue : Value
+ltValue =
+    Custom { moduleName = [ "Basics" ], name = "LT" } []
+
+
+eqValue : Value
+eqValue =
+    Custom { moduleName = [ "Basics" ], name = "EQ" } []
+
+
+gtValue : Value
+gtValue =
+    Custom { moduleName = [ "Basics" ], name = "GT" } []
+
+
+{-| Pre-computed Nothing value.
+-}
+nothingValue : Value
+nothingValue =
+    Custom { moduleName = [ "Maybe" ], name = "Nothing" } []
+
+
+fromOrder : Order -> Value
+fromOrder order =
+    case order of
+        LT ->
+            ltValue
+
+        EQ ->
+            eqValue
+
+        GT ->
+            gtValue
+
+
+toOrder : Value -> Maybe Order
+toOrder value =
+    case value of
+        Custom { moduleName, name } [] ->
+            case ( moduleName, name ) of
+                ( [ "Basics" ], "LT" ) ->
+                    Just LT
+
+                ( [ "Basics" ], "EQ" ) ->
+                    Just EQ
+
+                ( [ "Basics" ], "GT" ) ->
+                    Just GT
+
+                _ ->
+                    Nothing
+
+        _ ->
+            Nothing
