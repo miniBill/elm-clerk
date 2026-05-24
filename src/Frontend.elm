@@ -7,6 +7,8 @@ import Html.Attributes as Attr
 import Lamdera
 import Types exposing (..)
 import Url
+import Page1
+import Http
 
 
 type alias Model =
@@ -28,9 +30,13 @@ app =
 init : Url.Url -> Nav.Key -> ( Model, Cmd FrontendMsg )
 init url key =
     ( { key = key
-      , message = "Welcome to Lamdera! You're looking at the auto-generated base implementation. Check out src/Frontend.elm to start coding!"
+      , message = "Welcome to Lamdera! You're looking at the auto-generated base implementation. Check out src/Frontend.elm to start coding! " ++ String.fromInt Page1.a
+      , text = "Starting..."
       }
-    , Cmd.none
+      , Http.get {
+         url = "/_x/read/src/Page1.elm"
+         , expect = Http.expectString GotText
+        }
     )
 
 
@@ -55,6 +61,14 @@ update msg model =
         NoOpFrontendMsg ->
             ( model, Cmd.none )
 
+        GotText result ->
+            case result of
+                Ok fullText ->
+                    ({model | text = fullText}, Cmd.none)
+
+                Err error ->
+                    ({model | text = "Error"}, Cmd.none)
+
 
 updateFromBackend : ToFrontend -> Model -> ( Model, Cmd FrontendMsg )
 updateFromBackend msg model =
@@ -74,6 +88,11 @@ view model =
                 , Attr.style "padding-top" "40px"
                 ]
                 [ Html.text model.message ]
+            , Html.div
+                [ Attr.style "font-family" "sans-serif"
+                , Attr.style "padding-top" "40px"
+                ]
+                [ Html.text model.text ]
             ]
         ]
     }
