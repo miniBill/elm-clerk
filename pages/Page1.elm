@@ -4,3 +4,9 @@ module Page1 exposing (output)
 output = List.sum (List.range 0 3)
 
 -- Second block of code
+
+a = 11
+
+b = 12
+
+c = a + b

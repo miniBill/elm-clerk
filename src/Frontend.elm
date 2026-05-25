@@ -36,9 +36,9 @@ app =
 init : Url.Url -> Nav.Key -> ( Model, Cmd FrontendMsg )
 init url key =
     ( { key = key
-      , message = "Welcome to Lamdera! Yo're looking at the auto-generated base implementation. Check out src/Frontend.elm to start coding! "
-      , source = Nothing
-      , output = Nothing
+      , message = "Welcome to Lamdera! You're looking at the auto-generated base implementation. Check out src/Frontend.elm to start coding! "
+      , sources = []
+      , outputs = []
       }
     , Http.get
         { url = "/_x/read/pages/Page1.elm"
@@ -72,15 +72,22 @@ update msg model =
             case result of
                 Ok fullText ->
                     let
-                        output =
-                            MEval.eval fullText
-                                (Elm.Syntax.Expression.FunctionOrValue
-                                    []
-                                    "output"
-                                )
+                        sources =
+                            String.split "\n\n" fullText
+
+                        outputs =
+                            sources
+                                |> List.map
+                                    (\string ->
+                                        MEval.eval string
+                                            (Elm.Syntax.Expression.FunctionOrValue
+                                                []
+                                                "output"
+                                            )
+                                    )
                     in
-                    ( { model | source = Just fullText, output = Just output }
-                    , sendToBackend (OutputToBackend fullText output)
+                    ( { model | sources = sources, outputs = outputs }
+                    , sendToBackend (OutputToBackend sources outputs)
                     )
 
                 Err error ->
@@ -109,8 +116,27 @@ view model =
                 [ Attr.style "font-family" "sans-serif"
                 , Attr.style "padding-top" "40px"
                 ]
+                [ Element.layout []
+                    (Source.view []
+                        { highlight = Nothing
+                        , buttons = []
+                        , source =
+                            case List.head model.sources of
+                                Just source ->
+                                    source
+
+                                Nothing ->
+                                    ""
+                        }
+                    )
+                ]
+            , Html.div
+                [ Attr.style "font-family" "monospace"
+                , Attr.style "font-size" "40px"
+                , Attr.style "padding-top" "40px"
+                ]
                 [ Html.text
-                    (case model.output of
+                    (case List.head model.outputs of
                         Just output ->
                             case output of
                                 Ok value ->
@@ -121,24 +147,6 @@ view model =
 
                         Nothing ->
                             "Not yet run"
-                    )
-                ]
-            , Html.div
-                [ Attr.style "font-family" "sans-serif"
-                , Attr.style "padding-top" "40px"
-                ]
-                [ Element.layout []
-                    (Source.view []
-                        { highlight = Nothing
-                        , buttons = []
-                        , source =
-                            case model.source of
-                                Just source ->
-                                    source
-
-                                Nothing ->
-                                    ""
-                        }
                     )
                 ]
             ]

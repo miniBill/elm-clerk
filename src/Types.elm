@@ -6,18 +6,19 @@ import Http
 import IntTypes
 import Url exposing (Url)
 
+
 type alias FrontendModel =
     { key : Key
     , message : String
-    , source : Maybe String
-    , output : Maybe Output
+    , sources : List String
+    , outputs : List Output
     }
 
 
 type alias BackendModel =
     { message : String
-    , source : Maybe String
-    , output : Maybe Output
+    , sources : List String
+    , outputs : List Output
     }
 
 
@@ -30,7 +31,7 @@ type FrontendMsg
 
 type ToBackend
     = NoOpToBackend
-    | OutputToBackend String Output
+    | OutputToBackend (List String) (List Output)
 
 
 type BackendMsg
