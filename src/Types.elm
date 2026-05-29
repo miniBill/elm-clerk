@@ -10,15 +10,14 @@ import Url exposing (Url)
 type alias FrontendModel =
     { key : Key
     , message : String
-    , sources : Sources
-    , outputs : Outputs
+    , source : String
+    , sections : List Section
     }
 
 
 type alias BackendModel =
     { message : String
-    , sources : Sources
-    , outputs : Outputs
+    , placeholderOutput : String
     }
 
 
@@ -32,7 +31,7 @@ type FrontendMsg
 
 type ToBackend
     = NoOpToBackend
-    | OutputToBackend Sources Outputs
+    | OutputToBackend String
 
 
 type BackendMsg
@@ -43,16 +42,7 @@ type ToFrontend
     = NoOpToFrontend
 
 
-type alias Sources =
-    List String
-
-
-type alias Outputs =
-    List (List String)
-
-
-
---type alias Output =
---    { module_run : Result IntTypes.Error IntTypes.Value
---    , section_parse : List String
---    }
+type Section
+    = MarkdownSection String
+    | CodeSection String
+    | EvaluatedSection String String

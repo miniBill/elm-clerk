@@ -27,6 +27,7 @@ import List.Extra
 import Parser exposing (DeadEnd)
 import ParserFast
 import ParserWithComments exposing (WithComments)
+import Regex
 import Rope exposing (Rope)
 import Types exposing (..)
 import UI.Source as Source
@@ -54,8 +55,8 @@ init : Url.Url -> Nav.Key -> ( Model, Cmd FrontendMsg )
 init url key =
     ( { key = key
       , message = "Welcome to Lamdera! You're looking at the auto-generated base implementation. Check out src/Frontend.elm to start coding! "
-      , sources = []
-      , outputs = []
+      , source = ""
+      , sections = []
       }
     , Http.get
         { url = "/_x/read/pages/Page1.elm"
@@ -87,37 +88,18 @@ update msg model =
 
         GotText result ->
             case result of
-                Ok fullText ->
+                Ok source ->
                     let
-                        sources : Sources
-                        sources =
-                            [ fullText, fullText ]
-
-                        module_run : String -> Result Error Value
-                        module_run source =
-                            Eval.Module.eval source
-                                (Elm.Syntax.Expression.FunctionOrValue
-                                    []
-                                    "output"
-                                )
-
-                        parseOutput : List String
-                        parseOutput =
-                            runCustomParse fullText
-
-                        outputs : Outputs
-                        outputs =
-                            --[ [ module_run fullText |> module_run_to_string ]
-                            [ runCustom fullText
-                            , parseOutput
-                            ]
+                        sections : List Section
+                        sections =
+                            sectionsFromSource source
                     in
-                    ( { model | sources = sources, outputs = outputs }
+                    ( { model | sections = sections }
                     , Cmd.batch
-                        [ sendToBackend (OutputToBackend sources outputs)
+                        [ sendToBackend (OutputToBackend "placeholder")
                         , Http.post
-                            { url = "/_x/write/pages/Page1.elm.json"
-                            , body = stringBody "application/json" (String.join "\n" parseOutput)
+                            { url = "/_x/write/pages/Page1.elm.txt"
+                            , body = stringBody "application/text" (plaintextFromSections sections)
                             , expect = Http.expectWhatever WroteText
                             }
                         ]
@@ -145,6 +127,198 @@ parse source =
 
         Err deadEnds ->
             deadEndsToString deadEnds
+
+
+sectionsFromSource : String -> List Section
+sectionsFromSource source =
+    let
+        newSectionRegex =
+            Maybe.withDefault Regex.never <|
+                Regex.fromString "\n\n+(?=[^\\s])"
+
+        maybeEnv =
+            makeEnv source
+    in
+    Regex.split newSectionRegex
+        source
+        --|> List.map (\x -> "\"" ++ x ++ "\"")
+        |> List.map (parseSection maybeEnv)
+
+
+plaintextFromSections : List Section -> String
+plaintextFromSections sections =
+    ""
+
+
+type Cell
+    = CellComment (Node String)
+    | CellDeclaration (Node Declaration)
+
+
+parseSection : MaybeEnv -> String -> Section
+parseSection maybeEnv source =
+    let
+        parser : ParserFast.Parser (List Cell)
+        parser =
+            ParserFast.skipWhileWhitespaceFollowedBy
+                (ParserFast.loopWhileSucceeds
+                    (ParserFast.oneOf2
+                        (ParserFast.map (\x -> CellDeclaration x.syntax) Elm.Parser.Declarations.declaration)
+                        (ParserFast.map CellComment Elm.Parser.Comments.singleLineComment)
+                        |> ParserFast.followedBySkipWhileWhitespace
+                    )
+                    []
+                    (\cell list -> cell :: list)
+                    (\list -> List.reverse list)
+                )
+
+        output : Result (List DeadEnd) (List Cell)
+        output =
+            ParserFast.run parser source
+
+        isCode cell =
+            case cell of
+                CellDeclaration _ ->
+                    True
+
+                _ ->
+                    False
+
+        isComment cell =
+            case cell of
+                CellComment _ ->
+                    True
+
+                _ ->
+                    False
+
+        handleOutput result =
+            case result of
+                Ok cells ->
+                    let
+                        lastCode =
+                            List.filter isCode cells
+                                |> List.Extra.last
+                    in
+                    case lastCode of
+                        Just (CellDeclaration (Node _ declaration)) ->
+                            let
+                                name =
+                                    extractNameFromDeclaration declaration
+                            in
+                            EvaluatedSection source (evaluate maybeEnv name)
+
+                        _ ->
+                            let
+                                firstComment =
+                                    List.filter isComment cells |> List.head
+                            in
+                            case firstComment of
+                                Just (CellComment (Node _ text)) ->
+                                    let
+                                        contents =
+                                            String.dropLeft 2 text
+                                    in
+                                    if String.startsWith " " contents then
+                                        MarkdownSection (String.dropLeft 1 contents)
+
+                                    else
+                                        MarkdownSection contents
+
+                                _ ->
+                                    CodeSection source
+
+                Err err ->
+                    CodeSection source
+    in
+    handleOutput output
+
+
+type alias MaybeEnv =
+    Result Error Env
+
+
+makeEnv : String -> Result Error Env
+makeEnv source =
+    let
+        file : Result (List DeadEnd) File
+        file =
+            Elm.Parser.parseToFile source
+
+        fileMappedError : Result Error File
+        fileMappedError =
+            Result.mapError ParsingError file
+
+        maybeEnv : Result Error Env
+        maybeEnv =
+            Result.andThen Eval.Module.buildInitialEnv fileMappedError
+    in
+    maybeEnv
+
+
+evaluate : Result Error Env -> String -> String
+evaluate maybeEnv expressionName =
+    let
+        expression : Expression
+        expression =
+            Elm.Syntax.Expression.FunctionOrValue
+                []
+                expressionName
+
+        expressionNode : Node Expression
+        expressionNode =
+            Node
+                { start = { row = 1, column = 1 }
+                , end = { row = 1, column = 2 }
+                }
+                expression
+
+        module_run : Result Error Value
+        module_run =
+            case maybeEnv of
+                Err e ->
+                    Err e
+
+                Ok env ->
+                    let
+                        ( result, _, _ ) =
+                            Eval.Expression.evalExpression
+                                expressionNode
+                                { trace = False }
+                                env
+                    in
+                    Result.mapError IntTypes.EvalError result
+    in
+    expressionName ++ " = " ++ module_run_to_string module_run
+
+
+extractNameFromDeclaration : Declaration -> String
+extractNameFromDeclaration declaration =
+    case declaration of
+        FunctionDeclaration function ->
+            let
+                (Node _ impl) =
+                    function.declaration
+
+                (Node _ name) =
+                    impl.name
+            in
+            name
+
+        AliasDeclaration typeAlias ->
+            "typealias"
+
+        CustomTypeDeclaration type_ ->
+            "customtype"
+
+        PortDeclaration signature ->
+            "portdeclaration"
+
+        InfixDeclaration infix_ ->
+            "infixdeclaration"
+
+        Destructuring node1 node2 ->
+            "destructuring"
 
 
 deadEndsToString : List DeadEnd -> List String
@@ -203,214 +377,6 @@ deadEndsToString deadEnds =
             )
 
 
-type Cell
-    = CellComment (Node String)
-    | CellDeclaration (Node Declaration)
-
-
-runCustomParse : String -> List String
-runCustomParse fullSource =
-    let
-        sources : List String
-        sources =
-            String.split "\n\n" fullSource
-
-        --parser : ParserFast.Parser (WithComments (Node Declaration))
-        --parser =
-        --    Elm.Parser.Declarations.declaration
-        --parser : ParserFast.Parser (WithComments (Node Declaration))
-        --parser =
-        parser : ParserFast.Parser (List Cell)
-        parser =
-            ParserFast.skipWhileWhitespaceFollowedBy
-                (ParserFast.loopWhileSucceeds
-                    (ParserFast.oneOf2
-                        (ParserFast.map (\x -> CellDeclaration x.syntax) Elm.Parser.Declarations.declaration)
-                        (ParserFast.map CellComment Elm.Parser.Comments.singleLineComment)
-                        |> ParserFast.followedBySkipWhileWhitespace
-                    )
-                    []
-                    (\cell list -> cell :: list)
-                    (\list -> List.reverse list)
-                )
-
-        outputs : List (Result (List DeadEnd) (List Cell))
-        outputs =
-            sources
-                |> List.map (ParserFast.run parser)
-
-        handleOutput : Result (List DeadEnd) (List Cell) -> List String
-        handleOutput result =
-            case result of
-                Ok cells ->
-                    cells
-                        |> List.map
-                            (\cell ->
-                                case cell of
-                                    CellComment (Node _ string) ->
-                                        let
-                                            contents =
-                                                String.dropLeft 2 string
-                                        in
-                                        if String.startsWith " " contents then
-                                            String.dropLeft 1 contents
-
-                                        else
-                                            contents
-
-                                    CellDeclaration (Node _ declaration) ->
-                                        Elm.Syntax.Declaration.encode declaration
-                                            |> Json.encode 2
-                            )
-
-                Err err ->
-                    deadEndsToString err
-
-        pairs : List ( String, Result (List DeadEnd) (List Cell) )
-        pairs =
-            List.map2 Tuple.pair sources outputs
-
-        combined : List String
-        combined =
-            List.concatMap
-                (\( source, output ) -> [ [ source ], handleOutput output ])
-                pairs
-                |> List.concat
-
-        --|> List.concatMap
-        --    (\source output -> [ source, handleOutput output ])
-    in
-    combined
-
-
-
---runCustomParse : String -> List String
---runCustomParse source =
---case ParserFast.run Elm.Parser.File.file source of
---    Ok file ->
---        File.encode file
---            |> Json.encode 2
---            |> List.singleton
---
---    Err error ->
---        deadEndsToString error
-
-
-runCustom : String -> List String
-runCustom source =
-    let
-        expression : String -> Expression
-        expression expressionName =
-            Elm.Syntax.Expression.FunctionOrValue
-                []
-                expressionName
-
-        file : Result (List DeadEnd) File
-        file =
-            Elm.Parser.parseToFile source
-
-        --fileResult : Result (List DeadEnd) File
-        --fileResult =
-        --    ParserFast.run Elm.Parser.File.file source
-        fileMappedError : Result Error File
-        fileMappedError =
-            Result.mapError ParsingError file
-
-        maybeEnv : Result Error Env
-        maybeEnv =
-            Result.andThen Eval.Module.buildInitialEnv fileMappedError
-
-        declarations : List String
-        declarations =
-            case fileMappedError of
-                Ok fileLocal ->
-                    fileLocal.declarations
-                        |> List.map
-                            (\node ->
-                                let
-                                    (Node range declaration) =
-                                        node
-                                in
-                                case declaration of
-                                    FunctionDeclaration function ->
-                                        let
-                                            (Node _ impl) =
-                                                function.declaration
-
-                                            (Node _ name) =
-                                                impl.name
-                                        in
-                                        name
-
-                                    AliasDeclaration typeAlias ->
-                                        "typealias"
-
-                                    CustomTypeDeclaration type_ ->
-                                        "customtype"
-
-                                    PortDeclaration signature ->
-                                        "portdeclaration"
-
-                                    InfixDeclaration infix_ ->
-                                        "infixdeclaration"
-
-                                    Destructuring node1 node2 ->
-                                        "destructuring"
-                            )
-
-                Err _ ->
-                    []
-
-        expressionNode : String -> Node Expression
-        expressionNode expressionName =
-            let
-                expressionIndex : Maybe Int
-                expressionIndex =
-                    source
-                        |> String.split "\n"
-                        |> List.Extra.findIndex
-                            (String.startsWith (expressionName ++ " ="))
-
-                node : Node Expression
-                node =
-                    case expressionIndex of
-                        Just index ->
-                            Node
-                                { start = { row = index + 1, column = 1 }
-                                , end = { row = index + 1, column = 1 + String.length expressionName }
-                                }
-                                (expression expressionName)
-
-                        Nothing ->
-                            Node.empty (expression expressionName)
-            in
-            node
-
-        module_run : String -> Result Error Value
-        module_run expressionName =
-            case maybeEnv of
-                Err e ->
-                    Err e
-
-                Ok env ->
-                    let
-                        ( result, _, _ ) =
-                            Eval.Expression.evalExpression
-                                (expressionNode expressionName)
-                                { trace = False }
-                                env
-                    in
-                    Result.mapError IntTypes.EvalError result
-
-        --module_run_output =
-        --    module_run_to_string (module_run "output")
-        evaluations : List String
-        evaluations =
-            declarations |> List.map (\name -> name ++ " = " ++ module_run_to_string (module_run name))
-    in
-    evaluations
-
-
 view : Model -> Browser.Document FrontendMsg
 view model =
     { title = ""
@@ -425,37 +391,48 @@ view model =
                     [ Html.text model.message ]
                 ]
              ]
-                ++ List.map2 viewSection model.sources model.outputs
+                ++ List.map viewSection model.sections
             )
         ]
     }
 
 
-viewSection : String -> List String -> Html.Html FrontendMsg
-viewSection source output =
-    Html.div []
-        ([ Html.div
-            [ Attr.style "font-family" "sans-serif"
-            , Attr.style "padding-top" "40px"
-            ]
-            [ Element.layout []
+viewSection : Section -> Html.Html FrontendMsg
+viewSection section =
+    let
+        syntaxHighlight : String -> Html.Html msg
+        syntaxHighlight code =
+            Element.layout []
                 (Source.view []
                     { highlight = Nothing
                     , buttons = []
-                    , source = source
+                    , source = code
                     }
                 )
+    in
+    Html.div []
+        [ Html.div
+            [ Attr.style "font-family" "sans-serif"
+            , Attr.style "padding-top" "10px"
             ]
-         ]
-            ++ List.map viewOutput output
-        )
+            (case section of
+                MarkdownSection markdown ->
+                    [ viewOutput markdown ]
+
+                CodeSection code ->
+                    [ syntaxHighlight code ]
+
+                EvaluatedSection code output ->
+                    [ syntaxHighlight code, viewOutput output ]
+            )
+        ]
 
 
 viewOutput : String -> Html.Html msg
 viewOutput output =
     Html.div
         [ Attr.style "font-family" "monospace"
-        , Attr.style "font-size" "40px"
+        , Attr.style "font-size" "20px"
         ]
         [ Html.pre []
             [ Html.text output
