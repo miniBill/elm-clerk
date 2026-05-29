@@ -16,7 +16,7 @@ import Eval.Expression
 import Eval.Module
 import Html
 import Html.Attributes as Attr
-import Http
+import Http exposing (stringBody)
 import IntTypes exposing (CallTree, Env, Error(..), Value)
 import Json.Encode as Json
 import Lamdera exposing (sendToBackend)
@@ -96,19 +96,33 @@ update msg model =
                                     "output"
                                 )
 
+                        parseOutput : List String
+                        parseOutput =
+                            runCustomParse fullText
+
                         outputs : Outputs
                         outputs =
                             --[ [ module_run fullText |> module_run_to_string ]
                             [ runCustom fullText
-                            , runCustomParse fullText
+                            , parseOutput
                             ]
                     in
                     ( { model | sources = sources, outputs = outputs }
-                    , sendToBackend (OutputToBackend sources outputs)
+                    , Cmd.batch
+                        [ sendToBackend (OutputToBackend sources outputs)
+                        , Http.post
+                            { url = "/_x/write/pages/Page1.elm.json"
+                            , body = stringBody "application/json" (String.join "\n" parseOutput)
+                            , expect = Http.expectWhatever WroteText
+                            }
+                        ]
                     )
 
                 Err error ->
                     ( model, Cmd.none )
+
+        WroteText _ ->
+            ( model, Cmd.none )
 
 
 updateFromBackend : ToFrontend -> Model -> ( Model, Cmd FrontendMsg )

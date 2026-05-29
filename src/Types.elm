@@ -27,6 +27,7 @@ type FrontendMsg
     | UrlChanged Url
     | NoOpFrontendMsg
     | GotText (Result Http.Error String)
+    | WroteText (Result Http.Error ())
 
 
 type ToBackend
