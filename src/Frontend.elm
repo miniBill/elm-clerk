@@ -220,50 +220,62 @@ runCustomParse fullSource =
         --    Elm.Parser.Declarations.declaration
         --parser : ParserFast.Parser (WithComments (Node Declaration))
         --parser =
-        parser : ParserFast.Parser Cell
+        parser : ParserFast.Parser (List Cell)
         parser =
-            ParserFast.oneOf2
-                (ParserFast.map (\x -> CellDeclaration x.syntax) Elm.Parser.Declarations.declaration)
-                (ParserFast.map CellComment Elm.Parser.Comments.singleLineComment)
+            ParserFast.skipWhileWhitespaceFollowedBy
+                (ParserFast.loopWhileSucceeds
+                    (ParserFast.oneOf2
+                        (ParserFast.map (\x -> CellDeclaration x.syntax) Elm.Parser.Declarations.declaration)
+                        (ParserFast.map CellComment Elm.Parser.Comments.singleLineComment)
+                        |> ParserFast.followedBySkipWhileWhitespace
+                    )
+                    []
+                    (\cell list -> cell :: list)
+                    (\list -> List.reverse list)
+                )
 
-        outputs : List (Result (List DeadEnd) Cell)
+        outputs : List (Result (List DeadEnd) (List Cell))
         outputs =
             sources
                 |> List.map (ParserFast.run parser)
 
-        handleOutput : Result (List DeadEnd) Cell -> String
+        handleOutput : Result (List DeadEnd) (List Cell) -> List String
         handleOutput result =
             case result of
-                Ok cell ->
-                    case cell of
-                        CellComment (Node _ string) ->
-                            let
-                                contents =
-                                    String.dropLeft 2 string
-                            in
-                            if String.startsWith " " contents then
-                                String.dropLeft 1 contents
+                Ok cells ->
+                    cells
+                        |> List.map
+                            (\cell ->
+                                case cell of
+                                    CellComment (Node _ string) ->
+                                        let
+                                            contents =
+                                                String.dropLeft 2 string
+                                        in
+                                        if String.startsWith " " contents then
+                                            String.dropLeft 1 contents
 
-                            else
-                                contents
+                                        else
+                                            contents
 
-                        CellDeclaration (Node _ declaration) ->
-                            Elm.Syntax.Declaration.encode declaration
-                                |> Json.encode 2
+                                    CellDeclaration (Node _ declaration) ->
+                                        Elm.Syntax.Declaration.encode declaration
+                                            |> Json.encode 2
+                            )
 
                 Err err ->
                     deadEndsToString err
-                        |> String.join "\n"
 
-        pairs : List ( String, Result (List DeadEnd) Cell )
+        pairs : List ( String, Result (List DeadEnd) (List Cell) )
         pairs =
             List.map2 Tuple.pair sources outputs
 
         combined : List String
         combined =
             List.concatMap
-                (\( source, output ) -> [ source, handleOutput output ])
+                (\( source, output ) -> [ [ source ], handleOutput output ])
                 pairs
+                |> List.concat
 
         --|> List.concatMap
         --    (\source output -> [ source, handleOutput output ])

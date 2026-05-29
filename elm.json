@@ -2,7 +2,6 @@
     "type": "application",
     "source-directories": [
         "src",
-        "pages",
         "vendor/elm-interpreter/src",
         "vendor/elm-interpreter/generated",
         "vendor/elm-interpreter/helpers",
