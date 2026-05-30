@@ -24,6 +24,8 @@ import IntTypes exposing (CallTree, Env, Error(..), Value)
 import Json.Encode as Json
 import Lamdera exposing (sendToBackend)
 import List.Extra
+import Markdown.Parser
+import Markdown.Renderer
 import Parser exposing (DeadEnd)
 import ParserFast
 import ParserWithComments exposing (WithComments)
@@ -429,7 +431,7 @@ viewSection section =
             ]
             (case section of
                 MarkdownSection markdown ->
-                    [ viewOutput markdown ]
+                    [ viewMarkdown markdown ]
 
                 CodeSection code ->
                     [ syntaxHighlight code ]
@@ -441,6 +443,26 @@ viewSection section =
                     List.map viewOutput strings
             )
         ]
+
+
+viewMarkdown : String -> Html.Html msg
+viewMarkdown markdown =
+    let
+        markdownView : String -> Result String (List (Html.Html msg))
+        markdownView localMarkdown =
+            localMarkdown
+                |> Markdown.Parser.parse
+                |> Result.mapError (\error -> error |> List.map Markdown.Parser.deadEndToString |> String.join "\n")
+                |> Result.andThen (Markdown.Renderer.render Markdown.Renderer.defaultHtmlRenderer)
+    in
+    case markdownView markdown of
+        Ok values ->
+            values
+                --|> List.map (\value -> Element.layout [] value)
+                |> Html.div []
+
+        Err err ->
+            Html.text err
 
 
 viewOutput : String -> Html.Html msg

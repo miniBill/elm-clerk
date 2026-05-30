@@ -17,6 +17,14 @@ a =
     11
 
 
+
+-- A block with some _very_ important **MARKDOWN**
+-- which lets us
+-- # Establish
+-- ## A hierarcy
+-- of text
+
+
 b =
     12
 
