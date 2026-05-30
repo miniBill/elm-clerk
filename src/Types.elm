@@ -46,3 +46,4 @@ type Section
     = MarkdownSection String
     | CodeSection String
     | EvaluatedSection String String
+    | ErrorSection (List String)

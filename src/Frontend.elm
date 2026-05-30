@@ -132,10 +132,12 @@ parse source =
 sectionsFromSource : String -> List Section
 sectionsFromSource source =
     let
+        newSectionRegex : Regex.Regex
         newSectionRegex =
             Maybe.withDefault Regex.never <|
                 Regex.fromString "\n\n+(?=[^\\s])"
 
+        maybeEnv : Result Error Env
         maybeEnv =
             makeEnv source
     in
@@ -143,6 +145,14 @@ sectionsFromSource source =
         source
         --|> List.map (\x -> "\"" ++ x ++ "\"")
         |> List.map (parseSection maybeEnv)
+        |> (\list ->
+                case maybeEnv of
+                    Err (ParsingError deadEnds) ->
+                        ErrorSection (deadEndsToString deadEnds) :: list
+
+                    _ ->
+                        list
+           )
 
 
 plaintextFromSections : List Section -> String
@@ -209,26 +219,28 @@ parseSection maybeEnv source =
                             EvaluatedSection source (evaluate maybeEnv name)
 
                         _ ->
-                            let
-                                firstComment =
-                                    List.filter isComment cells |> List.head
-                            in
-                            case firstComment of
-                                Just (CellComment (Node _ text)) ->
-                                    let
-                                        contents =
-                                            String.dropLeft 2 text
-                                    in
-                                    if String.startsWith " " contents then
-                                        MarkdownSection (String.dropLeft 1 contents)
+                            List.filter isComment cells
+                                |> List.map
+                                    (\comment ->
+                                        case comment of
+                                            CellComment (Node _ text) ->
+                                                let
+                                                    contents =
+                                                        String.dropLeft 2 text
+                                                in
+                                                if String.startsWith " " contents then
+                                                    String.dropLeft 1 contents
 
-                                    else
-                                        MarkdownSection contents
+                                                else
+                                                    contents
 
-                                _ ->
-                                    CodeSection source
+                                            _ ->
+                                                ""
+                                    )
+                                |> String.join "\n"
+                                |> MarkdownSection
 
-                Err err ->
+                Err _ ->
                     CodeSection source
     in
     handleOutput output
@@ -424,6 +436,9 @@ viewSection section =
 
                 EvaluatedSection code output ->
                     [ syntaxHighlight code, viewOutput output ]
+
+                ErrorSection strings ->
+                    List.map viewOutput strings
             )
         ]
 
