@@ -26,6 +26,8 @@ import Html.Attributes as Attr
 import Http exposing (stringBody)
 import IntTypes exposing (CallTree, Env, Error(..), Value)
 import Json.Encode as Json
+import Kernel
+import Kernel.Html
 import Lamdera exposing (sendToBackend)
 import List.Extra
 import Markdown.Html
@@ -221,11 +223,28 @@ parseSection maybeEnv source =
                     case lastCode of
                         Just (CellDeclaration (Node _ declaration)) ->
                             let
+                                name : String
                                 name =
                                     extractNameFromDeclaration declaration
-                            in
-                            EvaluatedSection source (evaluate maybeEnv name)
 
+                                evaluated : Result String Value
+                                evaluated =
+                                    evaluate maybeEnv name
+                            in
+                            case evaluated of
+                                Err error ->
+                                    ErrorSection [ error ]
+
+                                Ok value ->
+                                    case Kernel.html.fromValue value of
+                                        Just html ->
+                                            Kernel.Html.htmlToReal html
+                                                |> HtmlSection source
+
+                                        _ ->
+                                            EvaluatedSection source (Value.toString value)
+
+                        --EvaluatedSection source evaluated
                         _ ->
                             List.filter isComment cells
                                 |> List.map
@@ -276,7 +295,7 @@ makeEnv source =
     maybeEnv
 
 
-evaluate : Result Error Env -> String -> String
+evaluate : Result Error Env -> String -> Result String Value
 evaluate maybeEnv expressionName =
     let
         expression : Expression
@@ -309,30 +328,25 @@ evaluate maybeEnv expressionName =
                     in
                     Result.mapError IntTypes.EvalError result
 
-        module_run_to_string : Result Error Value -> String
-        module_run_to_string output =
-            case output of
-                Ok value ->
-                    Value.toString value
+        error_to_string : Error -> String
+        error_to_string error =
+            case error of
+                ParsingError deadends ->
+                    deadEndsToString deadends
+                        |> String.join "\n"
 
-                Err error ->
-                    case error of
-                        ParsingError deadends ->
-                            deadEndsToString deadends
-                                |> String.join "\n"
-
-                        EvalError errorData ->
-                            --[ String.join ", " errorData.currentModule
-                            --]
-                            --    ++
-                            (errorData.callStack
-                                |> List.map
-                                    (\nameRef -> String.join "." (nameRef.moduleName ++ [ nameRef.name ]))
-                            )
-                                ++ [ evalErrorKindToString errorData.error ]
-                                |> String.join "\n"
+                EvalError errorData ->
+                    --[ String.join ", " errorData.currentModule
+                    --]
+                    --    ++
+                    (errorData.callStack
+                        |> List.map
+                            (\nameRef -> String.join "." (nameRef.moduleName ++ [ nameRef.name ]))
+                    )
+                        ++ [ evalErrorKindToString errorData.error ]
+                        |> String.join "\n"
     in
-    expressionName ++ " = " ++ module_run_to_string module_run
+    module_run |> Result.mapError error_to_string
 
 
 extractNameFromDeclaration : Declaration -> String
@@ -499,6 +513,9 @@ viewSection section =
 
             EvaluatedSection code output ->
                 [ syntaxHighlight code, viewOutput output ]
+
+            HtmlSection code html ->
+                [ syntaxHighlight code, Element.html html ]
 
             ErrorSection strings ->
                 List.map viewOutput strings

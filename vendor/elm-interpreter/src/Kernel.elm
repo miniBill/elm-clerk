@@ -1,4 +1,4 @@
-module Kernel exposing (EvalFunction, functions)
+module Kernel exposing (..)
 
 import Array exposing (Array)
 import Bitwise
@@ -18,9 +18,9 @@ import Elm.Syntax.Pattern exposing (Pattern(..), QualifiedNameRef)
 import Environment
 import EvalResult
 import FastDict as Dict exposing (Dict)
-import Html
 import IntTypes exposing (Eval, EvalErrorData, EvalResult, Value(..))
 import Kernel.Debug
+import Kernel.Html exposing (Attr(..), Html(..))
 import Kernel.JsArray
 import Kernel.String
 import Kernel.Utils
@@ -180,9 +180,9 @@ functions evalFunction =
     --  Elm.Kernel.VirtualDom.style
     -- Elm.Kernel.VirtualDom
     , ( [ "Elm", "Kernel", "VirtualDom" ]
-      , [ ( "node", three string (list htmlAttr) (list htmlNode) to htmlNode buildVirtualNode Core.VirtualDom.node )
-        , ( "text", one string to htmlNode buildVirtualText Core.VirtualDom.node )
-        , ( "style", two string string to htmlAttr buildVirtualStyle Core.VirtualDom.style )
+      , [ ( "node", three string (list attr) (list html) to html Kernel.Html.node Core.VirtualDom.node )
+        , ( "text", one string to html Kernel.Html.text Core.VirtualDom.node )
+        , ( "style", two string string to attr Kernel.Html.style Core.VirtualDom.style )
         ]
       )
     ]
@@ -503,6 +503,120 @@ constant selector const _ =
     )
 
 
+html : Selector Html
+html =
+    { fromValue =
+        \value ->
+            case value of
+                Custom ctor args ->
+                    case ( ctor.moduleName, ctor.name, args ) of
+                        ( [ "Html" ], "Node", [ String name, attrsValue, nodesValue ] ) ->
+                            case
+                                ( attrsValue |> (list attr).fromValue
+                                , nodesValue |> (list html).fromValue
+                                )
+                            of
+                                ( Just attrs, Just nodes ) ->
+                                    Node name attrs nodes |> Just
+
+                                _ ->
+                                    Nothing
+
+                        ( [ "Html" ], "Text", [ textValue ] ) ->
+                            case textValue |> string.fromValue of
+                                Just text ->
+                                    Text text |> Just
+
+                                _ ->
+                                    Nothing
+
+                        _ ->
+                            Nothing
+
+                _ ->
+                    Nothing
+    , toValue =
+        \node ->
+            case node of
+                Node name attrs htmls ->
+                    let
+                        ctor =
+                            { moduleName = [ "Html" ]
+                            , name = "Node"
+                            }
+                    in
+                    Custom ctor
+                        [ name |> string.toValue
+                        , attrs |> (list attr).toValue
+                        , htmls |> (list html).toValue
+                        ]
+
+                Text text ->
+                    let
+                        ctor =
+                            { moduleName = [ "Html" ]
+                            , name = "Text"
+                            }
+                    in
+                    Custom ctor [ String text ]
+    , name = "Html.Node"
+    }
+
+
+attr : Selector Attr
+attr =
+    { fromValue =
+        \value ->
+            case value of
+                Custom ctor args ->
+                    case ( ctor.moduleName, ctor.name, args ) of
+                        ( [ "Html" ], "Attribute", [ firstValue, secondValue ] ) ->
+                            case
+                                ( firstValue |> string.fromValue
+                                , secondValue |> string.fromValue
+                                )
+                            of
+                                ( Just first, Just second ) ->
+                                    Attribute first second |> Just
+
+                                _ ->
+                                    Nothing
+
+                        ( [ "Html" ], "Property", [ firstValue, secondValue ] ) ->
+                            case
+                                firstValue |> string.fromValue
+                            of
+                                Just first ->
+                                    Property first secondValue |> Just
+
+                                _ ->
+                                    Nothing
+
+                        _ ->
+                            Nothing
+
+                _ ->
+                    Nothing
+    , toValue =
+        \item ->
+            case item of
+                Attribute first second ->
+                    let
+                        ctor =
+                            { moduleName = [ "Html" ], name = "Attribute" }
+                    in
+                    Custom ctor [ String first, String second ]
+
+                Property first second ->
+                    let
+                        ctor =
+                            { moduleName = [ "Html" ], name = "Property" }
+                    in
+                    Custom ctor [ String first, second ]
+    , name = "Html.Attr"
+    }
+
+
 zero :
     To
     -> OutSelector out ox
@@ -749,143 +863,3 @@ twoNumbers fInt fFloat implementation moduleName =
             _ ->
                 EvalResult.fail <| typeError env "Expected two numbers"
     )
-
-
-type HtmlNode
-    = Node String (List HtmlAttr) (List HtmlNode)
-    | Text String
-
-
-type HtmlAttr
-    = Attribute String String
-    | Property String Value
-
-
-htmlNode : Selector HtmlNode
-htmlNode =
-    { fromValue =
-        \value ->
-            case value of
-                Custom ctor args ->
-                    case ( ctor.moduleName, ctor.name, args ) of
-                        ( [ "Html" ], "Node", [ nameValue, attrsValue, nodesValue ] ) ->
-                            case
-                                ( nameValue |> string.fromValue
-                                , attrsValue |> (list htmlAttr).fromValue
-                                , nodesValue |> (list htmlNode).fromValue
-                                )
-                            of
-                                ( Just name, Just attrs, Just nodes ) ->
-                                    Node name attrs nodes |> Just
-
-                                _ ->
-                                    Nothing
-
-                        ( [ "Html" ], "Text", [ textValue ] ) ->
-                            case textValue |> string.fromValue of
-                                Just text ->
-                                    Text text |> Just
-
-                                _ ->
-                                    Nothing
-
-                        _ ->
-                            Nothing
-
-                _ ->
-                    Nothing
-    , toValue =
-        \node ->
-            case node of
-                Node name attrs nodes ->
-                    let
-                        ctor =
-                            { moduleName = [ "Html" ]
-                            , name = "Node"
-                            }
-                    in
-                    Custom ctor
-                        [ name |> string.toValue
-                        , attrs |> (list htmlAttr).toValue
-                        , nodes |> (list htmlNode).toValue
-                        ]
-
-                Text text ->
-                    let
-                        ctor =
-                            { moduleName = [ "Html" ]
-                            , name = "Text"
-                            }
-                    in
-                    Custom ctor [ String text ]
-    , name = "Html.Node"
-    }
-
-
-htmlAttr : Selector HtmlAttr
-htmlAttr =
-    { fromValue =
-        \value ->
-            case value of
-                Custom ctor args ->
-                    case ( ctor.moduleName, ctor.name, args ) of
-                        ( [ "Html" ], "Attribute", [ firstValue, secondValue ] ) ->
-                            case
-                                ( firstValue |> string.fromValue
-                                , secondValue |> string.fromValue
-                                )
-                            of
-                                ( Just first, Just second ) ->
-                                    Attribute first second |> Just
-
-                                _ ->
-                                    Nothing
-
-                        ( [ "Html" ], "Property", [ firstValue, secondValue ] ) ->
-                            case
-                                firstValue |> string.fromValue
-                            of
-                                Just first ->
-                                    Property first secondValue |> Just
-
-                                _ ->
-                                    Nothing
-
-                        _ ->
-                            Nothing
-
-                _ ->
-                    Nothing
-    , toValue =
-        \attr ->
-            case attr of
-                Attribute first second ->
-                    let
-                        ctor =
-                            { moduleName = [ "Html" ], name = "Attribute" }
-                    in
-                    Custom ctor [ String first, String second ]
-
-                Property first second ->
-                    let
-                        ctor =
-                            { moduleName = [ "Html" ], name = "Property" }
-                    in
-                    Custom ctor [ String first, second ]
-    , name = "Html.Attr"
-    }
-
-
-buildVirtualNode : String -> List HtmlAttr -> List HtmlNode -> HtmlNode
-buildVirtualNode name attrs nodes =
-    Node name attrs nodes
-
-
-buildVirtualText : String -> HtmlNode
-buildVirtualText text =
-    Text text
-
-
-buildVirtualStyle : String -> String -> HtmlAttr
-buildVirtualStyle first second =
-    Attribute first second

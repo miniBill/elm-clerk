@@ -1,7 +1,7 @@
 module Page1 exposing (output)
 
 import Html exposing (Html)
-import Html.Attributes
+import Html.Attributes exposing (style)
 import Rope
 import Types exposing (FrontendMsg)
 
@@ -10,19 +10,26 @@ myMaybe =
     Just 4
 
 
-element : Html String
-element =
+html : Html String
+html =
     Html.div
-        [ Html.Attributes.style "border-style" "solid"
-        , Html.Attributes.style "border-width" "1px"
-        ]
-        [ Html.div []
+        []
+        [ Html.div
+            [ style "border-style" "solid"
+            , style "border-width" "1px"
+            ]
             [ Html.text "a"
             ]
-        , Html.div []
+        , Html.div
+            [ style "border-style" "solid"
+            , style "border-width" "1px"
+            ]
             [ Html.text "b"
             ]
-        , Html.div []
+        , Html.div
+            [ style "border-style" "solid"
+            , style "border-width" "1px"
+            ]
             [ Html.text "c"
             ]
         ]
