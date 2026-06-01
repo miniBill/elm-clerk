@@ -1,9 +1,14 @@
 module Page1 exposing (output)
 
+import Element
 import Html exposing (Html)
 import Html.Attributes exposing (style)
 import Rope
 import Types exposing (FrontendMsg)
+
+
+add thing =
+    thing + 5
 
 
 myMaybe =
@@ -35,16 +40,24 @@ html =
         ]
 
 
+element : Html String
+element =
+    Element.layout []
+        (Element.column
+            []
+            [ Element.text "a"
+            , Element.text "b"
+            , Element.text "c"
+            ]
+        )
+
+
 
 -- First block of code
 
 
 output =
     List.sum (List.range 0 3)
-
-
-add thing =
-    thing + 5
 
 
 added =

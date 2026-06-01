@@ -1,4 +1,4 @@
-LIBRARIES = elm/core/1.0.5 elmcraft/core-extra/2.2.0 elm/html/1.0.1 miniBill/elm-rope/1.1.1 elm/virtual-dom/1.0.5
+LIBRARIES = elm/core/1.0.5 elmcraft/core-extra/2.2.0 elm/html/1.0.1 miniBill/elm-rope/1.1.1 elm/virtual-dom/1.0.5 mdgriffith/elm-ui/1.1.8 elm/json/1.1.4
 
 .PHONY: all
 all: generated/Core/Basics.elm

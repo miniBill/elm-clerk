@@ -233,7 +233,7 @@ parseSection maybeEnv source =
                             in
                             case evaluated of
                                 Err error ->
-                                    ErrorSection [ error ]
+                                    EvaluatedSection source error
 
                                 Ok value ->
                                     case Kernel.html.fromValue value of
