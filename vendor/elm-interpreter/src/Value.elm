@@ -227,7 +227,7 @@ toString value =
                     "{ " ++ String.join ", " (List.map (\( k, v ) -> k ++ " = " ++ toString v) pairs) ++ " }"
 
         List items ->
-            "[" ++ String.join "," (List.map toString items) ++ "]"
+            "[" ++ String.join ", " (List.map toString items) ++ "]"
 
         Custom name args ->
             case toArray value of

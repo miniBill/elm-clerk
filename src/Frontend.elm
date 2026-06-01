@@ -3,7 +3,11 @@ module Frontend exposing (..)
 import Browser exposing (UrlRequest(..))
 import Browser.Navigation as Nav
 import Dict exposing (Dict)
-import Element
+import Element exposing (Attribute, Element, fill, padding, paddingEach, px, width)
+import Element.Background
+import Element.Border
+import Element.Font as Font
+import Element.Region
 import Elm.Interface exposing (Exposed)
 import Elm.Parser
 import Elm.Parser.Comments
@@ -24,8 +28,10 @@ import IntTypes exposing (CallTree, Env, Error(..), Value)
 import Json.Encode as Json
 import Lamdera exposing (sendToBackend)
 import List.Extra
+import Markdown.Html
 import Markdown.Parser
 import Markdown.Renderer
+import Markdown.Renderer.ElmUi
 import Parser exposing (DeadEnd)
 import ParserFast
 import ParserWithComments exposing (WithComments)
@@ -302,6 +308,29 @@ evaluate maybeEnv expressionName =
                                 env
                     in
                     Result.mapError IntTypes.EvalError result
+
+        module_run_to_string : Result Error Value -> String
+        module_run_to_string output =
+            case output of
+                Ok value ->
+                    Value.toString value
+
+                Err error ->
+                    case error of
+                        ParsingError deadends ->
+                            deadEndsToString deadends
+                                |> String.join "\n"
+
+                        EvalError errorData ->
+                            --[ String.join ", " errorData.currentModule
+                            --]
+                            --    ++
+                            (errorData.callStack
+                                |> List.map
+                                    (\nameRef -> String.join "." (nameRef.moduleName ++ [ nameRef.name ]))
+                            )
+                                ++ [ evalErrorKindToString errorData.error ]
+                                |> String.join "\n"
     in
     expressionName ++ " = " ++ module_run_to_string module_run
 
@@ -391,62 +420,93 @@ deadEndsToString deadEnds =
             )
 
 
+evalErrorKindToString : IntTypes.EvalErrorKind -> String
+evalErrorKindToString errorKind =
+    case errorKind of
+        IntTypes.TypeError string ->
+            "TypeError: " ++ string
+
+        IntTypes.Unsupported string ->
+            "Unsupported: " ++ string
+
+        IntTypes.NameError string ->
+            "NameError: " ++ string
+
+        IntTypes.Todo string ->
+            "Todo: " ++ string
+
+
 view : Model -> Browser.Document FrontendMsg
 view model =
     { title = ""
     , body =
-        [ Html.div [ Attr.style "text-align" "left", Attr.style "padding-top" "40px", Attr.style "padding-left" "185px", Attr.style "padding-right" "40px" ]
-            ([ Html.div [ Attr.style "text-align" "center" ]
-                [ Html.img [ Attr.src "https://lamdera.app/lamdera-logo-black.png", Attr.width 150 ] []
-                , Html.div
-                    [ Attr.style "font-family" "sans-serif"
-                    , Attr.style "padding-top" "40px"
-                    ]
-                    [ Html.text model.message ]
-                ]
-             ]
-                ++ List.map viewSection model.sections
+        --[ Html.div [ Attr.style "text-align" "left", Attr.style "padding-top" "40px", Attr.style "padding-left" "185px", Attr.style "padding-right" "40px" ]
+        --([ Html.div [ Attr.style "text-align" "center" ]
+        --    [ Html.img [ Attr.src "https://lamdera.app/lamdera-logo-black.png", Attr.width 150 ] []
+        --    , Html.div
+        --        [ Attr.style "font-family" "sans-serif"
+        --        , Attr.style "padding-top" "40px"
+        --        ]
+        --        [ Html.text model.message ]
+        --    ]
+        -- ]
+        [ Element.layout []
+            (Element.column
+                -- left could be 185
+                [ Element.alignLeft, Element.paddingEach { top = 40, left = 40, right = 40, bottom = 0 } ]
+                ([ Element.image [ width (px 150), Element.centerX ] { src = "https://lamdera.app/lamdera-logo-black.png", description = "Lamdera logo" } ]
+                    ++ List.map viewSection model.sections
+                )
             )
         ]
+
+    --)
+    --]
     }
 
 
-viewSection : Section -> Html.Html FrontendMsg
-viewSection section =
-    let
-        syntaxHighlight : String -> Html.Html msg
-        syntaxHighlight code =
-            Element.layout []
-                (Source.viewExpression []
-                    { highlight = Nothing
-                    , buttons = []
-                    , source = code
-                    }
-                )
-    in
-    Html.div []
-        [ Html.div
-            [ Attr.style "font-family" "sans-serif"
-            , Attr.style "padding-top" "10px"
-            ]
-            (case section of
-                MarkdownSection markdown ->
-                    [ viewMarkdown markdown ]
-
-                CodeSection code ->
-                    [ syntaxHighlight code ]
-
-                EvaluatedSection code output ->
-                    [ syntaxHighlight code, viewOutput output ]
-
-                ErrorSection strings ->
-                    List.map viewOutput strings
-            )
+monospace : Attribute msg
+monospace =
+    Font.family
+        [ Font.typeface "Fira Code"
+        , Font.monospace
         ]
 
 
-viewMarkdown : String -> Html.Html msg
-viewMarkdown markdown =
+viewSection : Section -> Element FrontendMsg
+viewSection section =
+    let
+        syntaxHighlight : String -> Element msg
+        syntaxHighlight code =
+            Source.viewExpression []
+                { highlight = Nothing
+                , buttons = []
+                , source = code
+                }
+    in
+    --Html.div []
+    --    [ Html.div
+    --        [ Attr.style "font-family" "sans-serif"
+    --        , Attr.style "padding-top" "10px"
+    --        ]
+    Element.column [ width fill, paddingEach { top = 10, right = 0, bottom = 0, left = 0 } ]
+        (case section of
+            MarkdownSection markdown ->
+                [ viewMarkdownHtml markdown ]
+
+            CodeSection code ->
+                [ syntaxHighlight code ]
+
+            EvaluatedSection code output ->
+                [ syntaxHighlight code, viewOutput output ]
+
+            ErrorSection strings ->
+                List.map viewOutput strings
+        )
+
+
+viewMarkdownHtml : String -> Element msg
+viewMarkdownHtml markdown =
     let
         markdownView : String -> Result String (List (Html.Html msg))
         markdownView localMarkdown =
@@ -458,30 +518,52 @@ viewMarkdown markdown =
     case markdownView markdown of
         Ok values ->
             values
-                --|> List.map (\value -> Element.layout [] value)
                 |> Html.div []
+                |> Element.html
 
         Err err ->
-            Html.text err
+            Element.text err
 
 
-viewOutput : String -> Html.Html msg
+viewMarkdown : String -> Element FrontendMsg
+viewMarkdown markdown =
+    let
+        markdownView : String -> Result String (List (Element msg))
+        markdownView localMarkdown =
+            localMarkdown
+                |> Markdown.Parser.parse
+                |> Result.mapError (\error -> error |> List.map Markdown.Parser.deadEndToString |> String.join "\n")
+                |> Result.andThen (Markdown.Renderer.render Markdown.Renderer.ElmUi.renderer)
+    in
+    case markdownView markdown of
+        Ok values ->
+            values
+                |> Element.column []
+
+        Err err ->
+            Element.text err
+
+
+viewOutput : String -> Element msg
 viewOutput output =
-    Html.div
-        [ Attr.style "font-family" "monospace"
-        , Attr.style "font-size" "20px"
+    Element.column
+        [ monospace
+        , Font.size 24
+        , Element.paddingXY 10 10
+        , Element.Background.color (Element.rgb255 240 240 240)
+        , width fill
         ]
-        [ Html.pre []
-            [ Html.text output
-            ]
+        [ Element.text output
+
+        --, Element.row []
+        --    [ Element.el
+        --        [ Element.Border.dashed ]
+        --        (Element.text "a")
+        --    , Element.el
+        --        [ Element.Border.dashed ]
+        --        (Element.text "b")
+        --    , Element.el
+        --        [ Element.Border.dashed ]
+        --        (Element.text "c")
+        --    ]
         ]
-
-
-module_run_to_string : Result Error Value -> String
-module_run_to_string output =
-    case output of
-        Ok value ->
-            Value.toString value
-
-        Err _ ->
-            "Error"
