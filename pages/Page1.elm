@@ -7,8 +7,13 @@ import Rope
 import Types exposing (FrontendMsg)
 
 
-add thing =
-    thing + 5
+add : Int -> Int -> Int
+add first second =
+    (10 * first) + second
+
+
+plusTen =
+    add 1
 
 
 myMaybe =
@@ -46,7 +51,6 @@ element =
         (Element.column
             []
             [ Element.text "a"
-            , Element.text "b"
             , Element.text "c"
             ]
         )
@@ -60,11 +64,9 @@ output =
     List.sum (List.range 0 3)
 
 
-added =
-    add 11
 
-
-
+--added =
+--    add 11
 -- Second block of code
 -- which continues on the
 -- next few rows!

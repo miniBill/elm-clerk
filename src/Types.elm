@@ -2,6 +2,8 @@ module Types exposing (..)
 
 import Browser exposing (UrlRequest)
 import Browser.Navigation exposing (Key)
+import Dict exposing (Dict)
+import Element exposing (Element)
 import Html exposing (Html)
 import Http
 import IntTypes
@@ -13,6 +15,7 @@ type alias FrontendModel =
     , message : String
     , source : String
     , sections : List Section
+    , interactiveValues : Dict String (List IntTypes.Value)
     }
 
 
@@ -28,6 +31,7 @@ type FrontendMsg
     | NoOpFrontendMsg
     | GotText (Result Http.Error String)
     | WroteText (Result Http.Error ())
+    | InteractiveUpdated String (List IntTypes.Value)
 
 
 type ToBackend
@@ -47,5 +51,6 @@ type Section
     = MarkdownSection String
     | CodeSection String
     | EvaluatedSection String String
+    | InteractiveSection String (List (Element FrontendMsg)) String
     | HtmlSection String (Html FrontendMsg)
     | ErrorSection (List String)

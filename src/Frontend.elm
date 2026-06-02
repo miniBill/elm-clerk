@@ -18,13 +18,16 @@ import Elm.Syntax.Expression exposing (Expression(..))
 import Elm.Syntax.File as File exposing (File)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node exposing (Node(..))
+import Elm.Syntax.Pattern exposing (Pattern(..))
+import Elm.Syntax.Signature exposing (Signature)
+import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation(..))
 import Eval
 import Eval.Expression
 import Eval.Module
 import Html
 import Html.Attributes as Attr
 import Http exposing (stringBody)
-import IntTypes exposing (CallTree, Env, Error(..), Value)
+import IntTypes exposing (CallTree, Env, Error(..), Value(..))
 import Json.Encode as Json
 import Kernel
 import Kernel.Html
@@ -39,6 +42,7 @@ import ParserFast
 import ParserWithComments exposing (WithComments)
 import Regex
 import Rope exposing (Rope)
+import ToString exposing (deadEndsToStrings, evalErrorKindToString, functionDeclarationToString)
 import Types exposing (..)
 import UI.Source as Source
 import Url
@@ -67,6 +71,7 @@ init url key =
       , message = "Welcome to Lamdera! You're looking at the auto-generated base implementation. Check out src/Frontend.elm to start coding! "
       , source = ""
       , sections = []
+      , interactiveValues = Dict.empty
       }
     , Http.get
         { url = "/_x/read/pages/Page1.elm"
@@ -102,7 +107,7 @@ update msg model =
                     let
                         sections : List Section
                         sections =
-                            sectionsFromSource source
+                            sectionsFromSource model source
                     in
                     ( { model | sections = sections }
                     , Cmd.batch
@@ -121,6 +126,9 @@ update msg model =
         WroteText _ ->
             ( model, Cmd.none )
 
+        InteractiveUpdated name value ->
+            ( { model | interactiveValues = Dict.insert name value model.interactiveValues }, Cmd.none )
+
 
 updateFromBackend : ToFrontend -> Model -> ( Model, Cmd FrontendMsg )
 updateFromBackend msg model =
@@ -136,11 +144,11 @@ parse source =
             [ "Ok" ]
 
         Err deadEnds ->
-            deadEndsToString deadEnds
+            deadEndsToStrings deadEnds
 
 
-sectionsFromSource : String -> List Section
-sectionsFromSource source =
+sectionsFromSource : Model -> String -> List Section
+sectionsFromSource model source =
     let
         newSectionRegex : Regex.Regex
         newSectionRegex =
@@ -154,11 +162,11 @@ sectionsFromSource source =
     Regex.split newSectionRegex
         source
         --|> List.map (\x -> "\"" ++ x ++ "\"")
-        |> List.map (parseSection maybeEnv)
+        |> List.map (parseSection model maybeEnv)
         |> (\list ->
                 case maybeEnv of
                     Err (ParsingError deadEnds) ->
-                        ErrorSection (deadEndsToString deadEnds) :: list
+                        ErrorSection (deadEndsToStrings deadEnds) :: list
 
                     _ ->
                         list
@@ -175,8 +183,8 @@ type Cell
     | CellDeclaration (Node Declaration)
 
 
-parseSection : MaybeEnv -> String -> Section
-parseSection maybeEnv source =
+parseSection : FrontendModel -> MaybeEnv -> String -> Section
+parseSection model maybeEnv source =
     let
         parser : ParserFast.Parser (List Cell)
         parser =
@@ -223,19 +231,61 @@ parseSection maybeEnv source =
                     case lastCode of
                         Just (CellDeclaration (Node _ declaration)) ->
                             let
-                                name : String
-                                name =
+                                ( expressionName, maybeTypeAnnotation ) =
                                     extractNameFromDeclaration declaration
 
                                 evaluated : Result String Value
                                 evaluated =
-                                    evaluate maybeEnv name
+                                    evaluateName maybeEnv expressionName
                             in
-                            case evaluated of
-                                Err error ->
+                            case ( evaluated, maybeTypeAnnotation ) of
+                                ( Err error, _ ) ->
                                     EvaluatedSection source error
 
-                                Ok value ->
+                                --PartiallyApplied Env (List Value) (List (Node Pattern)) (Maybe QualifiedNameRef) (Node Expression)
+                                ( Ok ((PartiallyApplied env values patterns maybeName expression) as functionDeclaration), typeAnnotation ) ->
+                                    let
+                                        parameterNames : List String
+                                        parameterNames =
+                                            [ "first", "second" ]
+
+                                        functionOutput : Result String Value
+                                        functionOutput =
+                                            --let
+                                            --zipped = List.map2 Tuple.pair parameterNames model.interactiveValues
+                                            --mapFunction key value =
+                                            --    value |> List.map
+                                            --newEnv : Env
+                                            --newEnv =
+                                            --    { env
+                                            --        | values = Dict.union (model.interactiveValues |> Dict.map (\key value ->
+                                            --            let a : FrontendModel -> MaybeEnv -> String -> Section
+                                            --            a = value in
+                                            --, interactiveValues : Dict String (List IntTypes.Value)
+                                            --                                                        a
+                                            --                                                    ) env.values
+                                            --                                                }
+                                            --                                        in
+                                            evaluate (Ok env) expression
+
+                                        functionDeclarationElement : Element msg
+                                        functionDeclarationElement =
+                                            functionDeclaration
+                                                |> functionDeclarationToString
+                                                |> viewOutput
+                                    in
+                                    case functionOutput of
+                                        Ok functionOutputOk ->
+                                            --EvaluatedSection source (functionDeclarationToString functionDeclaration)
+                                            InteractiveSection source
+                                                [ functionDeclarationElement ]
+                                                (Value.toString functionOutputOk)
+
+                                        Err functionOutputError ->
+                                            --EvaluatedSection source (functionDeclarationToString functionDeclaration)
+                                            InteractiveSection source [ functionDeclarationElement ] functionOutputError
+
+                                ( Ok value, _ ) ->
                                     case Kernel.html.fromValue value of
                                         Just html ->
                                             Kernel.Html.htmlToReal html
@@ -295,8 +345,8 @@ makeEnv source =
     maybeEnv
 
 
-evaluate : Result Error Env -> String -> Result String Value
-evaluate maybeEnv expressionName =
+evaluateName : Result Error Env -> String -> Result String Value
+evaluateName maybeEnv expressionName =
     let
         expression : Expression
         expression =
@@ -311,7 +361,13 @@ evaluate maybeEnv expressionName =
                 , end = { row = 1, column = 2 }
                 }
                 expression
+    in
+    evaluate maybeEnv expressionNode
 
+
+evaluate : Result Error Env -> Node Expression -> Result String Value
+evaluate maybeEnv expressionNode =
+    let
         module_run : Result Error Value
         module_run =
             case maybeEnv of
@@ -332,13 +388,10 @@ evaluate maybeEnv expressionName =
         error_to_string error =
             case error of
                 ParsingError deadends ->
-                    deadEndsToString deadends
+                    deadEndsToStrings deadends
                         |> String.join "\n"
 
                 EvalError errorData ->
-                    --[ String.join ", " errorData.currentModule
-                    --]
-                    --    ++
                     (errorData.callStack
                         |> List.map
                             (\nameRef -> String.join "." (nameRef.moduleName ++ [ nameRef.name ]))
@@ -349,105 +402,66 @@ evaluate maybeEnv expressionName =
     module_run |> Result.mapError error_to_string
 
 
-extractNameFromDeclaration : Declaration -> String
+extractNameFromDeclaration : Declaration -> ( String, List String )
 extractNameFromDeclaration declaration =
     case declaration of
         FunctionDeclaration function ->
             let
-                (Node _ impl) =
-                    function.declaration
+                expressionName : String
+                expressionName =
+                    function
+                        |> .declaration
+                        |> Node.value
+                        |> .name
+                        |> Node.value
 
-                (Node _ name) =
-                    impl.name
+                typeAnnotation : Maybe TypeAnnotation
+                typeAnnotation =
+                    function
+                        |> .signature
+                        |> Maybe.map Node.value
+                        |> Maybe.map .typeAnnotation
+                        |> Maybe.map Node.value
+
+                unpackAnnotation : TypeAnnotation -> List String
+                unpackAnnotation annotation =
+                    case annotation of
+                        Typed (Node _ ( moduleName, name )) children ->
+                            [ String.join "." (moduleName ++ [ name ]) ]
+                                ++ (children
+                                        |> List.map Node.value
+                                        |> List.concatMap unpackAnnotation
+                                   )
+
+                        FunctionTypeAnnotation first second ->
+                            (first |> Node.value |> unpackAnnotation)
+                                ++ (second |> Node.value |> unpackAnnotation)
+
+                        _ ->
+                            [ "Other" ]
+
+                typeAnnotationList : List String
+                typeAnnotationList =
+                    typeAnnotation
+                        |> Maybe.map unpackAnnotation
+                        |> Maybe.withDefault []
             in
-            name
+            ( expressionName, typeAnnotationList )
 
         AliasDeclaration typeAlias ->
-            "typealias"
+            ( "typealias", [] )
 
         CustomTypeDeclaration type_ ->
-            "customtype"
+            ( "customtype", [] )
 
         PortDeclaration signature ->
-            "portdeclaration"
+            ( "portdeclaration", [] )
 
         InfixDeclaration infix_ ->
-            "infixdeclaration"
+            ( "infixdeclaration", [] )
 
         Destructuring node1 node2 ->
-            "destructuring"
-
-
-deadEndsToString : List DeadEnd -> List String
-deadEndsToString deadEnds =
-    deadEnds
-        |> List.map
-            (\deadEnd ->
-                "At row "
-                    ++ String.fromInt deadEnd.row
-                    ++ ", column "
-                    ++ String.fromInt deadEnd.col
-                    ++ ", problem : "
-                    ++ (case deadEnd.problem of
-                            Parser.Expecting string ->
-                                "Expecting " ++ string
-
-                            Parser.ExpectingInt ->
-                                "Expecting Int"
-
-                            Parser.ExpectingHex ->
-                                "Expecting hex"
-
-                            Parser.ExpectingOctal ->
-                                "Expecting Octal"
-
-                            Parser.ExpectingBinary ->
-                                "Expecting Binary"
-
-                            Parser.ExpectingFloat ->
-                                "Expecting Float"
-
-                            Parser.ExpectingNumber ->
-                                "Expecting Number"
-
-                            Parser.ExpectingVariable ->
-                                "Expecting Variable"
-
-                            Parser.ExpectingSymbol string ->
-                                "Expecting symbol " ++ string
-
-                            Parser.ExpectingKeyword string ->
-                                "Expecting keyword " ++ string
-
-                            Parser.ExpectingEnd ->
-                                "Expecting end"
-
-                            Parser.UnexpectedChar ->
-                                "Unexpected char"
-
-                            Parser.Problem string ->
-                                "Problem: " ++ string
-
-                            Parser.BadRepeat ->
-                                "BadRepeat"
-                       )
-            )
-
-
-evalErrorKindToString : IntTypes.EvalErrorKind -> String
-evalErrorKindToString errorKind =
-    case errorKind of
-        IntTypes.TypeError string ->
-            "TypeError: " ++ string
-
-        IntTypes.Unsupported string ->
-            "Unsupported: " ++ string
-
-        IntTypes.NameError string ->
-            "NameError: " ++ string
-
-        IntTypes.Todo string ->
-            "Todo: " ++ string
+            ( "destructuring", [] )
 
 
 view : Model -> Browser.Document FrontendMsg
@@ -514,6 +528,9 @@ viewSection section =
             EvaluatedSection code output ->
                 [ syntaxHighlight code, viewOutput output ]
 
+            InteractiveSection code elements output ->
+                [ syntaxHighlight code, Element.row [ width fill ] elements, viewOutput output ]
+
             HtmlSection code html ->
                 [ syntaxHighlight code, Element.html html ]
 
@@ -570,17 +587,5 @@ viewOutput output =
         , Element.Background.color (Element.rgb255 240 240 240)
         , width fill
         ]
-        [ Element.text output
-
-        --, Element.row []
-        --    [ Element.el
-        --        [ Element.Border.dashed ]
-        --        (Element.text "a")
-        --    , Element.el
-        --        [ Element.Border.dashed ]
-        --        (Element.text "b")
-        --    , Element.el
-        --        [ Element.Border.dashed ]
-        --        (Element.text "c")
-        --    ]
-        ]
+        [ Element.text output ]
+        |> Element.el [ Element.paddingXY 0 3, width fill ]
