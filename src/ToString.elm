@@ -14,11 +14,6 @@ listToString left right list =
     left ++ String.join ", " list ++ right
 
 
-listToStringParen : List String -> String
-listToStringParen =
-    listToString "(" ")"
-
-
 listToStringDebug : String -> List String -> String
 listToStringDebug name list =
     name ++ " [" ++ String.join ", " list ++ "]"
@@ -196,7 +191,7 @@ annotationToString annotation =
             list
                 |> List.map Node.value
                 |> List.concatMap annotationToStringsDebug
-                |> listToStringParen
+                |> listToString "(" ")"
 
         TypeAnnotation.Record _ ->
             "{{Record}}"
@@ -210,88 +205,81 @@ annotationToString annotation =
                 ++ (second |> Node.value |> annotationToString)
 
 
+patternToString pattern =
+    case pattern of
+        AllPattern ->
+            "_"
 
---patternToString pattern =
---    case pattern of
---        AllPattern ->
---            "_"
---
---        UnitPattern ->
---            "()"
---
---        CharPattern char ->
---            "'" ++ String.fromChar char ++ "'"
---
---        StringPattern string ->
---            "\"" ++ string ++ "\""
---
---        IntPattern int ->
---            String.fromInt int
---
---        HexPattern hex ->
---            "hex-" ++ String.fromInt hex
---
---        FloatPattern float ->
---            String.fromFloat float
---
---        TuplePattern patterns ->
---            "("
---                ++ (patterns
---                        |> List.map Node.value
---                        |> List.map patternToString
---                        |> String.join ", "
---                   )
---                ++ ")"
---
---        RecordPattern record ->
---            "{"
---                ++ (record
---                        |> List.map Node.value
---                        |> listToStringDebug "RecordPattern"
---                   )
---                ++ "}"
---
---        UnConsPattern first second ->
---            "UnConsPattern"
---                ++ (first
---                        |> Node.value
---                        |> patternToStringDebug
---                   )
---                ++ " "
---                ++ (second
---                        |> Node.value
---                        |> patternToStringDebug
---                   )
---
---        ListPattern list ->
---            list
---                |> List.map Node.value
---                |> List.map patternToStringDebug
---                |> listToStringParenDebug "ListPattern"
---
---        VarPattern name ->
---            "VarPattern: " ++ name
---
---        NamedPattern name list ->
---            "NamedPattern"
---                ++ qualifiedNameRefToString name
---                ++ (list
---                        |> List.map Node.value
---                        |> List.map patternToStringDebug
---                        |> listToStringParenDebug ""
---                   )
---
---        AsPattern first second ->
---            "AsPattern"
---                ++ (first
---                        |> Node.value
---                        |> patternToStringDebug
---                   )
---                ++ " "
---                ++ (second |> Node.value)
---
---        ParenthesizedPattern inner ->
---            "ParenPattern (" ++ (inner |> Node.value |> patternToStringDebug) ++ ")"
+        UnitPattern ->
+            "()"
+
+        CharPattern char ->
+            "'" ++ String.fromChar char ++ "'"
+
+        StringPattern string ->
+            "\"" ++ string ++ "\""
+
+        IntPattern int ->
+            String.fromInt int
+
+        HexPattern hex ->
+            "hex-" ++ String.fromInt hex
+
+        FloatPattern float ->
+            String.fromFloat float
+
+        TuplePattern patterns ->
+            "("
+                ++ (patterns
+                        |> List.map Node.value
+                        |> List.map patternToString
+                        |> String.join ", "
+                   )
+                ++ ")"
+
+        RecordPattern record ->
+            record
+                |> List.map Node.value
+                |> listToString "{" "}"
+
+        UnConsPattern first second ->
+            (first
+                |> Node.value
+                |> patternToString
+            )
+                ++ " :: "
+                ++ (second
+                        |> Node.value
+                        |> patternToString
+                   )
+
+        ListPattern list ->
+            list
+                |> List.map Node.value
+                |> List.map patternToString
+                |> listToString "[" "]"
+
+        VarPattern name ->
+            name
+
+        NamedPattern name list ->
+            qualifiedNameRefToString name
+                ++ (list
+                        |> List.map Node.value
+                        |> List.map patternToString
+                        |> String.join " "
+                   )
+
+        AsPattern first second ->
+            (first
+                |> Node.value
+                |> patternToString
+            )
+                ++ " as "
+                ++ (second |> Node.value)
+
+        ParenthesizedPattern inner ->
+            "(" ++ (inner |> Node.value |> patternToString) ++ ")"
 
 
 patternToStringDebug pattern =

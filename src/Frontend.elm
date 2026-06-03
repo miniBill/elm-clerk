@@ -33,7 +33,7 @@ import ParserFast
 import ParserWithComments exposing (WithComments)
 import Regex
 import Result.Extra
-import ToString exposing (annotationToString, annotationToStringsDebug, deadEndsToStrings, evalErrorKindToString, functionDeclarationToString, patternToStringDebug)
+import ToString exposing (annotationToString, annotationToStringsDebug, deadEndsToStrings, evalErrorKindToString, functionDeclarationToString, patternToString, patternToStringDebug)
 import Types exposing (..)
 import UI.Source as Source
 import Url
@@ -237,8 +237,7 @@ parseSection model maybeEnv source =
                                 Err error ->
                                     EvaluatedSection source error
 
-                                --PartiallyApplied Env (List Value) (List (Node Pattern)) (Maybe QualifiedNameRef) (Node Expression)
-                                Ok ((PartiallyApplied env values patterns maybeName expression) as functionDeclaration) ->
+                                Ok ((PartiallyApplied _ _ _ _ _) as functionDeclaration) ->
                                     handlePartiallyApplied source functionDeclaration declaration
 
                                 Ok value ->
@@ -303,25 +302,32 @@ declarationArguments declaration =
             Nothing
 
 
-declarationTypeAnnotation : Declaration -> Maybe TypeAnnotation
+declarationTypeAnnotation : Declaration -> Result String TypeAnnotation
 declarationTypeAnnotation declaration =
     case declaration of
         FunctionDeclaration function ->
             function
                 |> .signature
-                |> Maybe.map Node.value
-                |> Maybe.map .typeAnnotation
-                |> Maybe.map Node.value
+                |> Maybe.map Ok
+                |> Maybe.withDefault (Err "No signature")
+                |> Result.map Node.value
+                |> Result.map .typeAnnotation
+                |> Result.map Node.value
 
         _ ->
-            Nothing
+            Err "Not a function declaration"
 
 
-parseTogether : List Pattern -> List TypeAnnotation -> Result String (List ( String, String ))
-parseTogether patterns annotations =
-    List.map2 Tuple.pair patterns annotations
-        |> Result.Extra.combineMap parseTogetherSingle
-        |> Result.map List.concat
+parseTogether : List Pattern -> Declaration -> Int -> Result String (List ( String, String ))
+parseTogether patterns declaration numApplied =
+    declarationTypeAnnotation declaration
+        |> Result.map bigAnnotationToList
+        |> Result.andThen
+            (\ann ->
+                List.map2 Tuple.pair (List.drop numApplied patterns) ann
+                    |> Result.Extra.combineMap parseTogetherSingle
+                    |> Result.map List.concat
+            )
 
 
 parseTogetherSingle : ( Pattern, TypeAnnotation ) -> Result String (List ( String, String ))
@@ -332,6 +338,11 @@ parseTogetherSingle ( pattern, annotation ) =
                 |> Result.Extra.combineMap parseTogetherSingle
                 |> Result.map List.concat
 
+        --( RecordPattern patterns, TypeAnnotation.Record record ) ->
+        --    Err "record not implemented"
+        --(UnConsPattern head rest, TypeAnnotation. )->
+        --ListPattern (List (Node Pattern))
+        --VarPattern String
         ( VarPattern binding, TypeAnnotation.Typed moduleNode patterns ) ->
             let
                 typeName : String
@@ -352,8 +363,11 @@ parseTogetherSingle ( pattern, annotation ) =
             in
             Ok [ ( binding, fullTypeName ) ]
 
+        --NamedPattern QualifiedNameRef (List (Node Pattern))
+        --AsPattern (Node Pattern) (Node String)
+        --ParenthesizedPattern (Node Pattern)
         ( p, a ) ->
-            Err (patternToStringDebug p ++ " : " ++ (a |> annotationToString))
+            Err ("Can't handle " ++ patternToStringDebug p ++ " : " ++ (a |> annotationToString))
 
 
 parseTogetherExperiment : Declaration -> List Pattern -> List a -> String
@@ -363,42 +377,28 @@ parseTogetherExperiment declaration evalPatterns alreadyApplied =
         arguments =
             declarationArguments declaration
 
-        bigAnnotation : Maybe TypeAnnotation
+        bigAnnotation : Result String TypeAnnotation
         bigAnnotation =
             declarationTypeAnnotation declaration
-
-        annotationStrings : List String
-        annotationStrings =
-            declarationTypeAnnotation declaration
-                |> Maybe.map annotationToStringsDebug
-                |> Maybe.withDefault []
 
         relevantPatterns : List String
         relevantPatterns =
             evalPatterns
                 |> List.drop (List.length alreadyApplied)
-                |> List.map patternToStringDebug
-
-        pairs : List ( String, String )
-        pairs =
-            List.map2
-                Tuple.pair
-                relevantPatterns
-                annotationStrings
+                |> List.map patternToString
 
         annotationList : List TypeAnnotation
         annotationList =
             bigAnnotation
-                |> Maybe.map bigAnnotationToList
-                |> Maybe.withDefault []
+                |> Result.map bigAnnotationToList
+                |> Result.withDefault []
 
         parsedTogether : Result String (List ( String, String ))
         parsedTogether =
             parseTogether
-                (evalPatterns
-                    |> List.drop (List.length alreadyApplied)
-                )
-                annotationList
+                evalPatterns
+                declaration
+                (List.length alreadyApplied)
     in
     (if Maybe.withDefault [] arguments == evalPatterns then
         "Equal"
@@ -407,14 +407,7 @@ parseTogetherExperiment declaration evalPatterns alreadyApplied =
         "Not equal"
     )
         ++ "\n"
-        ++ (if List.length pairs == List.length evalPatterns then
-                "length pairs == evalPatterns"
-
-            else
-                "length pairs != evalPatterns"
-           )
-        ++ "\n"
-        ++ (if List.length pairs == List.length annotationStrings - 1 then
+        ++ (if List.length (parsedTogether |> Result.withDefault []) == List.length annotationList - 1 then
                 "Annotations seem correct"
 
             else
@@ -422,24 +415,25 @@ parseTogetherExperiment declaration evalPatterns alreadyApplied =
            )
         ++ "\n Patterns from Eval:\n"
         ++ (evalPatterns
-                |> List.map patternToStringDebug
+                |> List.map patternToString
                 |> String.join ", "
            )
         ++ "\n Patterns from syntax:\n"
         ++ (arguments
                 |> Maybe.withDefault []
-                |> List.map patternToStringDebug
+                |> List.map patternToString
                 |> String.join ", "
            )
         ++ "\n Type annotations:\n"
-        ++ (annotationStrings
+        ++ (annotationList
+                |> List.map annotationToString
                 |> String.join ", "
            )
-        ++ "\n Pairs: \n"
-        ++ (pairs
-                |> List.map (\( first, second ) -> first ++ ": " ++ second)
-                |> String.join "\n"
-           )
+        --++ "\n Pairs: \n"
+        --++ (parse
+        --        |> List.map (\( first, second ) -> first ++ ": " ++ second)
+        --        |> String.join "\n"
+        --   )
         ++ "\n Parsed together: \n"
         ++ (case parsedTogether of
                 Ok list ->
@@ -460,6 +454,9 @@ handlePartiallyApplied source functionDeclaration declaration =
                 together =
                     parseTogetherExperiment declaration (patterns |> List.map Node.value) values
 
+                --togetherTwo =
+                --    parseTogetherTwo declaration (patterns |> List.map Node.value) (List.length values)
+                --
                 parameterNames : List String
                 parameterNames =
                     [ "first", "second" ]
