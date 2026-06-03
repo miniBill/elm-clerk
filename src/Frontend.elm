@@ -31,8 +31,8 @@ import Parser exposing (DeadEnd)
 import ParserFast
 import Regex
 import Result.Extra
-import ToString exposing (annotationToString, deadEndsToStrings, evalErrorKindToString, patternToStringDebug)
-import Types exposing (FrontendModel, FrontendMsg(..), Section(..), ToBackend(..), ToFrontend(..))
+import ToString exposing (annotationToString, deadEndsToStrings, evalErrorKindToString, patternToStringDebug, qualifiedNameRefToString)
+import Types exposing (FrontendModel, FrontendMsg(..), InteractiveValues, Section(..), ToBackend(..), ToFrontend(..))
 import UI.Source as Source
 import Url
 import Value
@@ -155,7 +155,7 @@ sectionsFromSource model source =
     Regex.split newSectionRegex
         source
         --|> List.map (\x -> "\"" ++ x ++ "\"")
-        |> List.map (parseSection maybeEnv)
+        |> List.map (parseSection model.interactiveValues maybeEnv)
         |> (\list ->
                 case maybeEnv of
                     Err (ParsingError deadEnds) ->
@@ -176,8 +176,8 @@ type Cell
     | CellDeclaration (Node Declaration)
 
 
-parseSection : Result Error Env -> String -> Section
-parseSection maybeEnv source =
+parseSection : InteractiveValues -> Result Error Env -> String -> Section
+parseSection interactiveValues maybeEnv source =
     let
         parser : ParserFast.Parser (List Cell)
         parser =
@@ -236,7 +236,7 @@ parseSection maybeEnv source =
                                     EvaluatedSection source error
 
                                 Ok ((PartiallyApplied _ _ _ _ _) as functionDeclaration) ->
-                                    handlePartiallyApplied source functionDeclaration declaration
+                                    handlePartiallyApplied interactiveValues source functionDeclaration declaration
 
                                 Ok value ->
                                     handleSuccessfulParse source value
@@ -368,37 +368,59 @@ parseTogetherSingle ( pattern, annotation ) =
             Err ("Can't handle " ++ patternToStringDebug p ++ " : " ++ (a |> annotationToString))
 
 
+type alias InteractiveElement =
+    { key : String
+    , conversion : String -> Result String Value
+    , element : String -> String -> Element FrontendMsg
+    }
 
---type alias InteractiveElement = {
---    key: String,
---    conversion:
---}
 
-
-typeNodeMap : Dict String (String -> Element msg)
-typeNodeMap =
-    [ ( "Int"
-      , \binding ->
-            --Element.Input.slider []
+interactiveElementInt : InteractiveElement
+interactiveElementInt =
+    let
+        conversion =
+            \text -> text |> String.toInt |> Result.fromMaybe "Couldn't parse!" |> Result.map Kernel.int.toValue
+    in
+    { key = "Int"
+    , conversion = conversion
+    , element =
+        \binding value ->
             viewOutput
                 ("Int, for binding " ++ binding ++ "!")
-      )
+    }
+
+
+typeNodeMap : Dict String InteractiveElement
+typeNodeMap =
+    [ interactiveElementInt
     ]
+        |> List.map (\x -> ( x.key, x ))
         |> Dict.fromList
 
 
-findTypeNode : ( String, String ) -> Result String (Element msg)
-findTypeNode ( binding, key ) =
-    Dict.get key typeNodeMap
-        |> Maybe.map (\func -> func binding)
-        |> Maybe.map Ok
-        |> Maybe.withDefault (Err ("No way to handle type \"" ++ key ++ "\""))
+viewInteractive : InteractiveValues -> String -> ( String, String ) -> Result String (Element FrontendMsg)
+viewInteractive interactiveValues functionName ( binding, typeName ) =
+    let
+        maybeValue =
+            Dict.get ( functionName, binding ) interactiveValues
+    in
+    case maybeValue of
+        Nothing ->
+            Err (binding ++ " - No value yet")
+
+        Just value ->
+            case Dict.get typeName typeNodeMap of
+                Nothing ->
+                    Err (binding ++ " - No way to handle type \"" ++ typeName ++ "\"")
+
+                Just interactiveElement ->
+                    Ok (interactiveElement.element binding value)
 
 
-handlePartiallyApplied : String -> Value -> Declaration -> Section
-handlePartiallyApplied source partiallyApplied declaration =
+handlePartiallyApplied : InteractiveValues -> String -> Value -> Declaration -> Section
+handlePartiallyApplied interactiveValues source partiallyApplied declaration =
     case partiallyApplied of
-        PartiallyApplied env values patterns _ expression ->
+        PartiallyApplied env values patterns nameRef expression ->
             let
                 maybePairs : Result String (List ( String, String ))
                 maybePairs =
@@ -430,17 +452,26 @@ handlePartiallyApplied source partiallyApplied declaration =
                 --        |> viewOutput
                 --    , viewOutput together
                 --    ]
-                interactiveElements : List (Element msg)
-                interactiveElements =
-                    case maybePairs of
-                        Ok pairs ->
-                            pairs
-                                |> Result.Extra.combineMap findTypeNode
-                                |> Result.Extra.extract (\error -> viewOutput error |> List.singleton)
+                maybeFunctionName : Maybe String
+                maybeFunctionName =
+                    nameRef |> Maybe.map qualifiedNameRefToString
 
-                        --|> Result.withDefault (\x -> x |> viewOutput |> List.singleton)
-                        Err error ->
-                            [ viewOutput error ]
+                interactiveElements : List (Element FrontendMsg)
+                interactiveElements =
+                    case maybeFunctionName of
+                        Nothing ->
+                            [ viewOutput "No name in function" ]
+
+                        Just functionName ->
+                            case maybePairs of
+                                Ok pairs ->
+                                    pairs
+                                        |> Result.Extra.combineMap (viewInteractive interactiveValues functionName)
+                                        |> Result.Extra.extract (\error -> viewOutput error |> List.singleton)
+
+                                --|> Result.withDefault (\x -> x |> viewOutput |> List.singleton)
+                                Err error ->
+                                    [ viewOutput error ]
             in
             case functionOutput of
                 Ok functionOutputOk ->
@@ -639,7 +670,7 @@ viewSection section =
         )
 
 
-viewMarkdownHtml : String -> Element msg
+viewMarkdownHtml : String -> Element FrontendMsg
 viewMarkdownHtml markdown =
     let
         markdownView : String -> Result String (List (Html.Html msg))
@@ -678,7 +709,7 @@ viewMarkdown markdown =
             Element.text err
 
 
-viewOutput : String -> Element msg
+viewOutput : String -> Element FrontendMsg
 viewOutput output =
     Element.column
         [ monospace

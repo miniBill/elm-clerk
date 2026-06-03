@@ -1,4 +1,4 @@
-module ToString exposing (annotationToString, deadEndsToStrings, evalErrorKindToString, patternToStringDebug)
+module ToString exposing (..)
 
 import Elm.Syntax.Expression exposing (Expression(..))
 import Elm.Syntax.Node as Node exposing (Node(..))

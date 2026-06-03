@@ -1,4 +1,4 @@
-module Types exposing (BackendModel, BackendMsg(..), FrontendModel, FrontendMsg(..), Section(..), ToBackend(..), ToFrontend(..))
+module Types exposing (..)
 
 import Browser exposing (UrlRequest)
 import Browser.Navigation exposing (Key)
@@ -15,8 +15,12 @@ type alias FrontendModel =
     , message : String
     , source : String
     , sections : List Section
-    , interactiveValues : Dict String (List InterpreterTypes.Value)
+    , interactiveValues : InteractiveValues
     }
+
+
+type alias InteractiveValues =
+    Dict ( String, String ) String
 
 
 type alias BackendModel =
@@ -31,7 +35,7 @@ type FrontendMsg
     | NoOpFrontendMsg
     | GotText (Result Http.Error String)
     | WroteText (Result Http.Error ())
-    | InteractiveUpdated String (List InterpreterTypes.Value)
+    | InteractiveUpdated ( String, String ) String
 
 
 type ToBackend
