@@ -117,12 +117,12 @@ innerCompare l r env =
         ( List _, _ ) ->
             uncomparable ()
 
-        ( Custom lname lvalues, Custom rname rvalues ) ->
-            if lname.moduleName /= rname.moduleName then
-                inner lname.moduleName rname.moduleName
+        ( Custom lModuleName lName lValues, Custom rModuleName rName rValues ) ->
+            if lModuleName /= rModuleName then
+                inner lModuleName rModuleName
 
-            else if lname.name /= rname.name then
-                inner lname.name rname.name
+            else if lName /= rName then
+                inner lName rName
 
             else
                 case ( Value.toArray l, Value.toArray r ) of
@@ -130,9 +130,9 @@ innerCompare l r env =
                         innerCompare (List la) (List ra) env
 
                     _ ->
-                        innerCompare (List lvalues) (List rvalues) env
+                        innerCompare (List lValues) (List rValues) env
 
-        ( Custom _ _, _ ) ->
+        ( Custom _ _ _, _ ) ->
             uncomparable ()
 
         ( Record ldict, Record rdict ) ->

@@ -2,9 +2,9 @@ module TestUtils exposing (evalExpect, evalTest, evalTest_, list, maybe, result,
 
 import Eval
 import Expect
+import InterpreterTypes exposing (Error(..), Value(..))
 import Syntax
 import Test exposing (Test, test)
-import InterpreterTypes exposing (Error(..), Value(..))
 
 
 evalTest_ : String -> (a -> Value) -> a -> Test
@@ -66,20 +66,20 @@ maybe : (a -> Value) -> Maybe a -> Value
 maybe f mx =
     case mx of
         Nothing ->
-            Custom { moduleName = [ "Maybe" ], name = "Nothing" } []
+            Custom [ "Maybe" ] "Nothing" []
 
         Just x ->
-            Custom { moduleName = [ "Maybe" ], name = "Just" } [ f x ]
+            Custom [ "Maybe" ] "Just" [ f x ]
 
 
 result : (e -> Value) -> (x -> Value) -> Result e x -> Value
 result ef xf rx =
     case rx of
         Err e ->
-            Custom { moduleName = [ "Result" ], name = "Err" } [ ef e ]
+            Custom [ "Result" ] "Err" [ ef e ]
 
         Ok x ->
-            Custom { moduleName = [ "Result" ], name = "Ok" } [ xf x ]
+            Custom [ "Result" ] "Ok" [ xf x ]
 
 
 withInt : String -> Int -> String -> String

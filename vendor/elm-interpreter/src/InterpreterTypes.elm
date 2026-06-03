@@ -62,7 +62,7 @@ type Value
     | Tuple Value Value
     | Triple Value Value Value
     | Record (Dict String Value)
-    | Custom QualifiedNameRef (List Value)
+    | Custom ModuleName String (List Value)
     | PartiallyApplied Env (List Value) (List (Node Pattern)) (Maybe QualifiedNameRef) (Node Expression)
     | JsArray (Array Value)
     | List (List Value)

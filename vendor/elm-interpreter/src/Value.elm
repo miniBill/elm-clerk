@@ -84,13 +84,13 @@ toExpression value =
                     |> List.map toExpression
                     |> Expression.ListExpr
 
-            Custom name args ->
+            Custom moduleName name args ->
                 case toArray value of
                     Just array ->
                         arrayToExpression "Array" array
 
                     Nothing ->
-                        (Node.empty (Expression.FunctionOrValue name.moduleName name.name)
+                        (Node.empty (Expression.FunctionOrValue moduleName name)
                             :: List.map toExpression args
                         )
                             |> Expression.Application
@@ -145,35 +145,25 @@ arrayToExpression name array =
 toArray : Value -> Maybe (List Value)
 toArray value =
     case value of
-        Custom name [ _, _, JsArray tree, JsArray tailArray ] ->
-            case ( name.moduleName, name.name ) of
-                ( [ "Array" ], "Array_elm_builtin" ) ->
-                    let
-                        treeToArray : Array Value -> List Value
-                        treeToArray arr =
-                            Array.foldr (\e a -> nodeToList e ++ a) [] arr
+        Custom [ "Array" ] "Array_elm_builtin" [ _, _, JsArray tree, JsArray tailArray ] ->
+            let
+                treeToArray : Array Value -> List Value
+                treeToArray arr =
+                    Array.foldr (\e a -> nodeToList e ++ a) [] arr
 
-                        nodeToList : Value -> List Value
-                        nodeToList node =
-                            case node of
-                                Custom qualifiedName [ JsArray arr ] ->
-                                    case qualifiedName.name of
-                                        "SubTree" ->
-                                            treeToArray arr
+                nodeToList : Value -> List Value
+                nodeToList node =
+                    case node of
+                        Custom _ "SubTree" [ JsArray arr ] ->
+                            treeToArray arr
 
-                                        "Leaf" ->
-                                            Array.toList arr
+                        Custom _ "Leaf" [ JsArray arr ] ->
+                            Array.toList arr
 
-                                        _ ->
-                                            []
-
-                                _ ->
-                                    []
-                    in
-                    Just (treeToArray tree ++ Array.toList tailArray)
-
-                _ ->
-                    Nothing
+                        _ ->
+                            []
+            in
+            Just (treeToArray tree ++ Array.toList tailArray)
 
         _ ->
             Nothing
@@ -229,7 +219,7 @@ toString value =
         List items ->
             "[" ++ String.join ", " (List.map toString items) ++ "]"
 
-        Custom name args ->
+        Custom moduleName name args ->
             case toArray value of
                 Just array ->
                     "Array.fromList [" ++ String.join "," (List.map toString array) ++ "]"
@@ -237,10 +227,10 @@ toString value =
                 Nothing ->
                     case args of
                         [] ->
-                            name.name
+                            name
 
                         _ ->
-                            name.name ++ " " ++ String.join " " (List.map toStringParens args)
+                            name ++ " " ++ String.join " " (List.map toStringParens args)
 
         JsArray arr ->
             "[" ++ String.join "," (List.map toString (Array.toList arr)) ++ "]"
@@ -252,7 +242,7 @@ toString value =
 toStringParens : Value -> String
 toStringParens value =
     case value of
-        Custom _ (_ :: _) ->
+        Custom _ _ (_ :: _) ->
             "(" ++ toString value ++ ")"
 
         Int i ->
@@ -301,24 +291,24 @@ on every comparison result (millions of times in fuzz tests).
 -}
 ltValue : Value
 ltValue =
-    Custom { moduleName = [ "Basics" ], name = "LT" } []
+    Custom [ "Basics" ] "LT" []
 
 
 eqValue : Value
 eqValue =
-    Custom { moduleName = [ "Basics" ], name = "EQ" } []
+    Custom [ "Basics" ] "EQ" []
 
 
 gtValue : Value
 gtValue =
-    Custom { moduleName = [ "Basics" ], name = "GT" } []
+    Custom [ "Basics" ] "GT" []
 
 
 {-| Pre-computed Nothing value.
 -}
 nothingValue : Value
 nothingValue =
-    Custom { moduleName = [ "Maybe" ], name = "Nothing" } []
+    Custom [ "Maybe" ] "Nothing" []
 
 
 fromOrder : Order -> Value
@@ -337,19 +327,14 @@ fromOrder order =
 toOrder : Value -> Maybe Order
 toOrder value =
     case value of
-        Custom { moduleName, name } [] ->
-            case ( moduleName, name ) of
-                ( [ "Basics" ], "LT" ) ->
-                    Just LT
+        Custom [ "Basics" ] "LT" [] ->
+            Just LT
 
-                ( [ "Basics" ], "EQ" ) ->
-                    Just EQ
+        Custom [ "Basics" ] "EQ" [] ->
+            Just EQ
 
-                ( [ "Basics" ], "GT" ) ->
-                    Just GT
-
-                _ ->
-                    Nothing
+        Custom [ "Basics" ] "GT" [] ->
+            Just GT
 
         _ ->
             Nothing

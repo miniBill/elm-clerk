@@ -263,9 +263,9 @@ evalApplication first rest cfg env =
     Types.recurseThen ( first, cfg, env )
         (\firstValue ->
             case firstValue of
-                Custom name customArgs ->
+                Custom moduleName name customArgs ->
                     Types.recurseMapThen ( rest, cfg, env )
-                        (\values -> Types.succeedPartial <| Custom name (customArgs ++ values))
+                        (\values -> Types.succeedPartial <| Custom moduleName name (customArgs ++ values))
 
                 PartiallyApplied localEnv oldArgs patterns maybeQualifiedName implementation ->
                     inner localEnv oldArgs patterns maybeQualifiedName implementation
@@ -492,12 +492,8 @@ evalVariant moduleName env name =
 
                     else
                         fixModuleName moduleName env
-
-                qualifiedNameRef : QualifiedNameRef
-                qualifiedNameRef =
-                    { moduleName = resolvedModuleName, name = name }
             in
-            Types.succeedPartial <| Custom qualifiedNameRef []
+            Types.succeedPartial <| Custom resolvedModuleName name []
 
 
 evalNonVariant : ModuleName -> String -> PartialEval Value
@@ -1208,10 +1204,10 @@ match env (Node _ pattern) value =
             else
                 noMatch
 
-        ( NamedPattern namePattern argsPatterns, Custom variant args ) ->
+        ( NamedPattern namePattern argsPatterns, Custom _ variant args ) ->
             -- Two names from different modules can never have the same type
             -- so if we assume the code typechecks we can skip the module name check
-            if namePattern.name == variant.name then
+            if namePattern.name == variant then
                 let
                     matchNamedPatternHelper :
                         EnvValues

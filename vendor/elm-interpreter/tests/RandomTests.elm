@@ -4,9 +4,9 @@ import Bitwise
 import Elm.Syntax.Expression as Expression
 import Eval.Module
 import Expect
+import InterpreterTypes exposing (Value(..))
 import Test exposing (Test, describe, test)
 import TestUtils exposing (evalTest, list)
-import InterpreterTypes exposing (Value(..))
 
 
 suite : Test

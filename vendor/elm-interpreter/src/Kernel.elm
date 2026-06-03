@@ -342,16 +342,11 @@ maybe selector =
     { fromValue =
         \value ->
             case value of
-                Custom ctor args ->
-                    case ( ctor.moduleName, ctor.name, args ) of
-                        ( [ "Maybe" ], "Nothing", [] ) ->
-                            Just Nothing
+                Custom [ "Maybe" ] "Nothing" [] ->
+                    Just Nothing
 
-                        ( [ "Maybe" ], "Just", [ arg ] ) ->
-                            Maybe.map Just (selector.fromValue arg)
-
-                        _ ->
-                            Nothing
+                Custom [ "Maybe" ] "Just" [ arg ] ->
+                    Maybe.map Just (selector.fromValue arg)
 
                 _ ->
                     Nothing
@@ -362,7 +357,7 @@ maybe selector =
                     Value.nothingValue
 
                 Just value ->
-                    Custom { moduleName = [ "Maybe" ], name = "Just" } [ selector.toValue value ]
+                    Custom [ "Maybe" ] "Just" [ selector.toValue value ]
     , name = "Maybe " ++ selector.name
     }
 
@@ -508,30 +503,20 @@ html =
     { fromValue =
         \value ->
             case value of
-                Custom ctor args ->
-                    case ( ctor.moduleName, ctor.name, args ) of
-                        ( [ "Html" ], "Node", [ String name, attrsValue, nodesValue ] ) ->
-                            case
-                                ( attrsValue |> (list attr).fromValue
-                                , nodesValue |> (list html).fromValue
-                                )
-                            of
-                                ( Just attrs, Just nodes ) ->
-                                    Node name attrs nodes |> Just
-
-                                _ ->
-                                    Nothing
-
-                        ( [ "Html" ], "Text", [ textValue ] ) ->
-                            case textValue |> string.fromValue of
-                                Just text ->
-                                    Text text |> Just
-
-                                _ ->
-                                    Nothing
+                Custom [ "Html" ] "Node" [ String name, attrsValue, nodesValue ] ->
+                    case
+                        ( attrsValue |> (list attr).fromValue
+                        , nodesValue |> (list html).fromValue
+                        )
+                    of
+                        ( Just attrs, Just nodes ) ->
+                            Node name attrs nodes |> Just
 
                         _ ->
                             Nothing
+
+                Custom [ "Html" ] "Text" [ String text ] ->
+                    Text text |> Just
 
                 _ ->
                     Nothing
@@ -539,26 +524,15 @@ html =
         \node ->
             case node of
                 Node name attrs htmls ->
-                    let
-                        ctor =
-                            { moduleName = [ "Html" ]
-                            , name = "Node"
-                            }
-                    in
-                    Custom ctor
+                    Custom [ "Html" ]
+                        "Node"
                         [ name |> string.toValue
                         , attrs |> (list attr).toValue
                         , htmls |> (list html).toValue
                         ]
 
                 Text text ->
-                    let
-                        ctor =
-                            { moduleName = [ "Html" ]
-                            , name = "Text"
-                            }
-                    in
-                    Custom ctor [ String text ]
+                    Custom [ "Html" ] "Text" [ String text ]
     , name = "Html.Node"
     }
 
@@ -568,32 +542,11 @@ attr =
     { fromValue =
         \value ->
             case value of
-                Custom ctor args ->
-                    case ( ctor.moduleName, ctor.name, args ) of
-                        ( [ "Html" ], "Attribute", [ firstValue, secondValue ] ) ->
-                            case
-                                ( firstValue |> string.fromValue
-                                , secondValue |> string.fromValue
-                                )
-                            of
-                                ( Just first, Just second ) ->
-                                    Attribute first second |> Just
+                Custom [ "Html" ] "Attribute" [ String first, String second ] ->
+                    Attribute first second |> Just
 
-                                _ ->
-                                    Nothing
-
-                        ( [ "Html" ], "Property", [ firstValue, secondValue ] ) ->
-                            case
-                                firstValue |> string.fromValue
-                            of
-                                Just first ->
-                                    Property first secondValue |> Just
-
-                                _ ->
-                                    Nothing
-
-                        _ ->
-                            Nothing
+                Custom [ "Html" ] "Property" [ String first, secondValue ] ->
+                    Property first secondValue |> Just
 
                 _ ->
                     Nothing
@@ -601,18 +554,10 @@ attr =
         \item ->
             case item of
                 Attribute first second ->
-                    let
-                        ctor =
-                            { moduleName = [ "Html" ], name = "Attribute" }
-                    in
-                    Custom ctor [ String first, String second ]
+                    Custom [ "Html" ] "Attribute" [ String first, String second ]
 
                 Property first second ->
-                    let
-                        ctor =
-                            { moduleName = [ "Html" ], name = "Property" }
-                    in
-                    Custom ctor [ String first, second ]
+                    Custom [ "Html" ] "Property" [ String first, second ]
     , name = "Html.Attr"
     }
 

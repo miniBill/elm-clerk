@@ -3,9 +3,9 @@ module ScopingTests exposing (suite)
 import Elm.Syntax.Expression as Expression
 import Eval.Module
 import Expect
+import InterpreterTypes exposing (Value(..))
 import Test exposing (Test, describe, test)
 import TestUtils exposing (list)
-import InterpreterTypes exposing (Value(..))
 
 
 suite : Test

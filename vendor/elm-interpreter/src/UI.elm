@@ -619,7 +619,7 @@ viewCallTree source ((CallTreeZipper { current, parent }) as zipper) =
         ]
 
 
-viewEnv : Types.Env -> Element msg
+viewEnv : InterpreterTypes.Env -> Element msg
 viewEnv { values } =
     if FastDict.isEmpty values then
         Element.none

@@ -5,9 +5,9 @@ import Elm.Syntax.Expression as Expression
 import Eval.Module
 import Expect
 import FastDict as Dict
+import InterpreterTypes exposing (Value(..))
 import Test exposing (Test, describe, test)
 import TestUtils exposing (evalTest, evalTest_, list, slowTest)
-import InterpreterTypes exposing (Value(..))
 
 
 suite : Test
@@ -140,8 +140,8 @@ tooMuchApplyTest =
         "(\\a -> Foo a) 0 1 2"
         identity
     <|
-        Custom
-            { moduleName = [ "Main" ], name = "Foo" }
+        Custom [ "Main" ]
+            "Foo"
             [ Int 0, Int 1, Int 2 ]
 
 
