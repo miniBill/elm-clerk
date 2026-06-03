@@ -3,18 +3,29 @@ module ToString exposing (..)
 import Elm.Syntax.Expression exposing (Expression(..))
 import Elm.Syntax.Node as Node exposing (Node(..))
 import Elm.Syntax.Pattern exposing (Pattern(..), QualifiedNameRef)
+import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import IntTypes exposing (Value(..))
 import Parser exposing (DeadEnd)
 import Value
 
 
-listToString : String -> List String -> String
-listToString name list =
+listToString : String -> String -> List String -> String
+listToString left right list =
+    left ++ String.join ", " list ++ right
+
+
+listToStringParen : List String -> String
+listToStringParen =
+    listToString "(" ")"
+
+
+listToStringDebug : String -> List String -> String
+listToStringDebug name list =
     name ++ " [" ++ String.join ", " list ++ "]"
 
 
-listToStringParen : String -> List String -> String
-listToStringParen name list =
+listToStringParenDebug : String -> List String -> String
+listToStringParenDebug name list =
     name ++ " (" ++ String.join ", " list ++ ")"
 
 
@@ -36,7 +47,7 @@ functionDeclarationToString value =
                 ++ [ "  Pattern:" ]
                 ++ (patterns
                         |> List.map Node.value
-                        |> List.map patternToString
+                        |> List.map patternToStringDebug
                    )
                 ++ [ "  Name:" ]
                 ++ (case maybeName of
@@ -130,7 +141,160 @@ deadEndToString deadEnd =
            )
 
 
-patternToString pattern =
+annotationToStringsDebug : TypeAnnotation -> List String
+annotationToStringsDebug annotation =
+    case annotation of
+        TypeAnnotation.GenericType a ->
+            [ "Generic " ++ a ]
+
+        TypeAnnotation.Typed (Node _ ( moduleName, name )) children ->
+            [ String.join "." (moduleName ++ [ name ]) ]
+                ++ (children
+                        |> List.map Node.value
+                        |> List.concatMap annotationToStringsDebug
+                   )
+
+        TypeAnnotation.Unit ->
+            [ "()" ]
+
+        TypeAnnotation.Tupled list ->
+            list
+                |> List.map Node.value
+                |> List.concatMap annotationToStringsDebug
+
+        TypeAnnotation.Record _ ->
+            [ "Record" ]
+
+        TypeAnnotation.GenericRecord _ _ ->
+            [ "GenericRecord" ]
+
+        TypeAnnotation.FunctionTypeAnnotation first second ->
+            (first |> Node.value |> annotationToStringsDebug)
+                ++ (second |> Node.value |> annotationToStringsDebug)
+
+
+annotationToString : TypeAnnotation -> String
+annotationToString annotation =
+    case annotation of
+        TypeAnnotation.GenericType generic ->
+            generic
+
+        -- `Typed`: `Maybe (Int -> String)`
+        --  | Typed (Node ( ModuleName, String )) (List (Node TypeAnnotation))
+        TypeAnnotation.Typed (Node _ ( moduleName, name )) children ->
+            String.join "." (moduleName ++ [ name ])
+                :: (children
+                        |> List.map Node.value
+                        |> List.map annotationToString
+                   )
+                |> String.join " "
+
+        TypeAnnotation.Unit ->
+            "()"
+
+        TypeAnnotation.Tupled list ->
+            list
+                |> List.map Node.value
+                |> List.concatMap annotationToStringsDebug
+                |> listToStringParen
+
+        TypeAnnotation.Record _ ->
+            "{{Record}}"
+
+        TypeAnnotation.GenericRecord _ _ ->
+            "{{GenericRecord}}"
+
+        TypeAnnotation.FunctionTypeAnnotation first second ->
+            (first |> Node.value |> annotationToString)
+                ++ " -> "
+                ++ (second |> Node.value |> annotationToString)
+
+
+
+--patternToString pattern =
+--    case pattern of
+--        AllPattern ->
+--            "_"
+--
+--        UnitPattern ->
+--            "()"
+--
+--        CharPattern char ->
+--            "'" ++ String.fromChar char ++ "'"
+--
+--        StringPattern string ->
+--            "\"" ++ string ++ "\""
+--
+--        IntPattern int ->
+--            String.fromInt int
+--
+--        HexPattern hex ->
+--            "hex-" ++ String.fromInt hex
+--
+--        FloatPattern float ->
+--            String.fromFloat float
+--
+--        TuplePattern patterns ->
+--            "("
+--                ++ (patterns
+--                        |> List.map Node.value
+--                        |> List.map patternToString
+--                        |> String.join ", "
+--                   )
+--                ++ ")"
+--
+--        RecordPattern record ->
+--            "{"
+--                ++ (record
+--                        |> List.map Node.value
+--                        |> listToStringDebug "RecordPattern"
+--                   )
+--                ++ "}"
+--
+--        UnConsPattern first second ->
+--            "UnConsPattern"
+--                ++ (first
+--                        |> Node.value
+--                        |> patternToStringDebug
+--                   )
+--                ++ " "
+--                ++ (second
+--                        |> Node.value
+--                        |> patternToStringDebug
+--                   )
+--
+--        ListPattern list ->
+--            list
+--                |> List.map Node.value
+--                |> List.map patternToStringDebug
+--                |> listToStringParenDebug "ListPattern"
+--
+--        VarPattern name ->
+--            "VarPattern: " ++ name
+--
+--        NamedPattern name list ->
+--            "NamedPattern"
+--                ++ qualifiedNameRefToString name
+--                ++ (list
+--                        |> List.map Node.value
+--                        |> List.map patternToStringDebug
+--                        |> listToStringParenDebug ""
+--                   )
+--
+--        AsPattern first second ->
+--            "AsPattern"
+--                ++ (first
+--                        |> Node.value
+--                        |> patternToStringDebug
+--                   )
+--                ++ " "
+--                ++ (second |> Node.value)
+--
+--        ParenthesizedPattern inner ->
+--            "ParenPattern (" ++ (inner |> Node.value |> patternToStringDebug) ++ ")"
+
+
+patternToStringDebug pattern =
     case pattern of
         AllPattern ->
             "AllPattern"
@@ -156,31 +320,31 @@ patternToString pattern =
         TuplePattern patterns ->
             patterns
                 |> List.map Node.value
-                |> List.map patternToString
-                |> listToStringParen "TuplePattern"
+                |> List.map patternToStringDebug
+                |> listToStringParenDebug "TuplePattern"
 
         RecordPattern record ->
             record
                 |> List.map Node.value
-                |> listToString "RecordPattern"
+                |> listToStringDebug "RecordPattern"
 
         UnConsPattern first second ->
             "UnConsPattern"
                 ++ (first
                         |> Node.value
-                        |> patternToString
+                        |> patternToStringDebug
                    )
                 ++ " "
                 ++ (second
                         |> Node.value
-                        |> patternToString
+                        |> patternToStringDebug
                    )
 
         ListPattern list ->
             list
                 |> List.map Node.value
-                |> List.map patternToString
-                |> listToStringParen "ListPattern"
+                |> List.map patternToStringDebug
+                |> listToStringParenDebug "ListPattern"
 
         VarPattern name ->
             "VarPattern: " ++ name
@@ -190,21 +354,21 @@ patternToString pattern =
                 ++ qualifiedNameRefToString name
                 ++ (list
                         |> List.map Node.value
-                        |> List.map patternToString
-                        |> listToStringParen ""
+                        |> List.map patternToStringDebug
+                        |> listToStringParenDebug ""
                    )
 
         AsPattern first second ->
             "AsPattern"
                 ++ (first
                         |> Node.value
-                        |> patternToString
+                        |> patternToStringDebug
                    )
                 ++ " "
                 ++ (second |> Node.value)
 
         ParenthesizedPattern inner ->
-            "ParenPattern (" ++ (inner |> Node.value |> patternToString) ++ ")"
+            "ParenPattern (" ++ (inner |> Node.value |> patternToStringDebug) ++ ")"
 
 
 expressionToString expression =
@@ -216,7 +380,7 @@ expressionToString expression =
             expressions
                 |> List.map Node.value
                 |> List.map expressionToString
-                |> listToString "Application"
+                |> listToStringDebug "Application"
 
         OperatorApplication _ _ _ _ ->
             "OperatorApplication"

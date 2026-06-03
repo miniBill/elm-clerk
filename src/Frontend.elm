@@ -15,7 +15,7 @@ import Elm.Syntax.File exposing (File)
 import Elm.Syntax.Node as Node exposing (Node(..))
 import Elm.Syntax.Pattern exposing (Pattern(..))
 import Elm.Syntax.Signature exposing (Signature)
-import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation(..))
+import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Eval.Expression
 import Eval.Module
 import Html
@@ -32,7 +32,8 @@ import Parser exposing (DeadEnd)
 import ParserFast
 import ParserWithComments exposing (WithComments)
 import Regex
-import ToString exposing (deadEndsToStrings, evalErrorKindToString, functionDeclarationToString, patternToString)
+import Result.Extra
+import ToString exposing (annotationToString, annotationToStringsDebug, deadEndsToStrings, evalErrorKindToString, functionDeclarationToString, patternToStringDebug)
 import Types exposing (..)
 import UI.Source as Source
 import Url
@@ -272,27 +273,19 @@ parseSection model maybeEnv source =
     handleOutput output
 
 
-annotationToStrings : TypeAnnotation -> List String
-annotationToStrings typeAnnotation =
-    let
-        unpackAnnotation : TypeAnnotation -> List String
-        unpackAnnotation annotation =
-            case annotation of
-                Typed (Node _ ( moduleName, name )) children ->
-                    [ String.join "." (moduleName ++ [ name ]) ]
-                        ++ (children
-                                |> List.map Node.value
-                                |> List.concatMap unpackAnnotation
-                           )
+bigAnnotationToList annotation =
+    case annotation of
+        TypeAnnotation.FunctionTypeAnnotation first second ->
+            (first
+                |> Node.value
+            )
+                :: (second
+                        |> Node.value
+                        |> bigAnnotationToList
+                   )
 
-                FunctionTypeAnnotation first second ->
-                    (first |> Node.value |> unpackAnnotation)
-                        ++ (second |> Node.value |> unpackAnnotation)
-
-                _ ->
-                    [ "Other" ]
-    in
-    unpackAnnotation typeAnnotation
+        other ->
+            [ other ]
 
 
 declarationArguments : Declaration -> Maybe (List Pattern)
@@ -324,6 +317,45 @@ declarationTypeAnnotation declaration =
             Nothing
 
 
+parseTogether : List Pattern -> List TypeAnnotation -> Result String (List ( String, String ))
+parseTogether patterns annotations =
+    List.map2 Tuple.pair patterns annotations
+        |> Result.Extra.combineMap parseTogetherSingle
+        |> Result.map List.concat
+
+
+parseTogetherSingle : ( Pattern, TypeAnnotation ) -> Result String (List ( String, String ))
+parseTogetherSingle ( pattern, annotation ) =
+    case ( pattern, annotation ) of
+        ( TuplePattern patterns, TypeAnnotation.Tupled annotations ) ->
+            List.map2 Tuple.pair (patterns |> List.map Node.value) (annotations |> List.map Node.value)
+                |> Result.Extra.combineMap parseTogetherSingle
+                |> Result.map List.concat
+
+        ( VarPattern binding, TypeAnnotation.Typed moduleNode patterns ) ->
+            let
+                typeName : String
+                typeName =
+                    moduleNode
+                        |> Node.value
+                        |> (\( moduleName, name ) -> moduleName ++ [ name ])
+                        |> String.join "."
+
+                fullTypeName : String
+                fullTypeName =
+                    typeName
+                        :: (patterns
+                                |> List.map Node.value
+                                |> List.map annotationToString
+                           )
+                        |> String.join " "
+            in
+            Ok [ ( binding, fullTypeName ) ]
+
+        ( p, a ) ->
+            Err (patternToStringDebug p ++ " : " ++ (a |> annotationToString))
+
+
 parseTogetherExperiment : Declaration -> List Pattern -> List a -> String
 parseTogetherExperiment declaration evalPatterns alreadyApplied =
     let
@@ -331,24 +363,42 @@ parseTogetherExperiment declaration evalPatterns alreadyApplied =
         arguments =
             declarationArguments declaration
 
-        annotations : List String
-        annotations =
+        bigAnnotation : Maybe TypeAnnotation
+        bigAnnotation =
             declarationTypeAnnotation declaration
-                |> Maybe.map annotationToStrings
+
+        annotationStrings : List String
+        annotationStrings =
+            declarationTypeAnnotation declaration
+                |> Maybe.map annotationToStringsDebug
                 |> Maybe.withDefault []
 
         relevantPatterns : List String
         relevantPatterns =
             evalPatterns
                 |> List.drop (List.length alreadyApplied)
-                |> List.map patternToString
+                |> List.map patternToStringDebug
 
         pairs : List ( String, String )
         pairs =
             List.map2
                 Tuple.pair
                 relevantPatterns
-                annotations
+                annotationStrings
+
+        annotationList : List TypeAnnotation
+        annotationList =
+            bigAnnotation
+                |> Maybe.map bigAnnotationToList
+                |> Maybe.withDefault []
+
+        parsedTogether : Result String (List ( String, String ))
+        parsedTogether =
+            parseTogether
+                (evalPatterns
+                    |> List.drop (List.length alreadyApplied)
+                )
+                annotationList
     in
     (if Maybe.withDefault [] arguments == evalPatterns then
         "Equal"
@@ -364,7 +414,7 @@ parseTogetherExperiment declaration evalPatterns alreadyApplied =
                 "length pairs != evalPatterns"
            )
         ++ "\n"
-        ++ (if List.length pairs == List.length annotations - 1 then
+        ++ (if List.length pairs == List.length annotationStrings - 1 then
                 "Annotations seem correct"
 
             else
@@ -372,23 +422,33 @@ parseTogetherExperiment declaration evalPatterns alreadyApplied =
            )
         ++ "\n Patterns from Eval:\n"
         ++ (evalPatterns
-                |> List.map patternToString
+                |> List.map patternToStringDebug
                 |> String.join ", "
            )
         ++ "\n Patterns from syntax:\n"
         ++ (arguments
                 |> Maybe.withDefault []
-                |> List.map patternToString
+                |> List.map patternToStringDebug
                 |> String.join ", "
            )
         ++ "\n Type annotations:\n"
-        ++ (annotations
+        ++ (annotationStrings
                 |> String.join ", "
            )
-        ++ "\n"
+        ++ "\n Pairs: \n"
         ++ (pairs
                 |> List.map (\( first, second ) -> first ++ ": " ++ second)
                 |> String.join "\n"
+           )
+        ++ "\n Parsed together: \n"
+        ++ (case parsedTogether of
+                Ok list ->
+                    list
+                        |> List.map (\( pattern, annotation ) -> pattern ++ ": " ++ annotation)
+                        |> String.join "\n"
+
+                Err string ->
+                    "Error: " ++ string
            )
 
 
@@ -485,11 +545,7 @@ evaluateName maybeEnv expressionName =
 
         expressionNode : Node Expression
         expressionNode =
-            Node
-                { start = { row = 1, column = 1 }
-                , end = { row = 1, column = 2 }
-                }
-                expression
+            Node.empty expression
     in
     evaluate maybeEnv expressionNode
 

@@ -15,19 +15,34 @@ applied2 =
     repeatParen 5 "Bird"
 
 
-repeat : Char -> Char -> Int -> String -> String
-repeat front end repetitions body =
-    String.fromChar front ++ String.repeat repetitions body ++ String.fromChar end
-
-
 repeatParen : Int -> String -> String
 repeatParen =
     repeat '(' ')'
 
 
+repeat : Char -> Char -> Int -> String -> String
+repeat front end repetitions body =
+    String.fromChar front ++ String.repeat repetitions body ++ String.fromChar end
+
+
 repeatBrace : Int -> String
 repeatBrace =
     repeat '{' '}'
+
+
+applyFunction : (Int -> String -> String) -> Int -> String -> String
+applyFunction func first second =
+    func first second
+
+
+unTuple : ( String, String ) -> String
+unTuple ( first, second ) =
+    first ++ ", " ++ second
+
+
+unTupleTwo : ( String, String ) -> String
+unTupleTwo tuple =
+    Tuple.first tuple ++ ", " ++ Tuple.second tuple
 
 
 
