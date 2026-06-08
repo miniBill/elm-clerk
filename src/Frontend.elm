@@ -1,4 +1,4 @@
-module Frontend exposing (Cell(..), Model, app)
+module Frontend exposing (Model, app)
 
 import Browser exposing (UrlRequest(..))
 import Browser.Navigation as Nav
@@ -6,6 +6,7 @@ import Element exposing (Attribute, Element, fill, paddingEach, px, width)
 import Element.Background
 import Element.Font as Font
 import Element.Input
+import Element.Lazy
 import Elm.Parser
 import Elm.Parser.Comments
 import Elm.Parser.Declarations
@@ -33,7 +34,7 @@ import ParserFast
 import Regex
 import Result.Extra
 import ToString exposing (annotationToString, deadEndsToStrings, evalErrorKindToString, patternToStringDebug, qualifiedNameRefToString)
-import Types exposing (FrontendModel, FrontendMsg(..), InteractiveValues, Section(..), ToBackend(..), ToFrontend(..))
+import Types exposing (Cell(..), FrontendModel, FrontendMsg(..), InteractiveValues, Section(..), SectionResult, ToBackend(..), ToFrontend(..))
 import UI.Source as Source
 import Url
 import Value
@@ -60,7 +61,7 @@ init _ key =
     ( { key = key
       , message = "Welcome to Lamdera! You're looking at the auto-generated base implementation. Check out src/Frontend.elm to start coding! "
       , source = ""
-      , sections = []
+      , sectionResults = []
       , interactiveValues = Dict.empty
       }
     , Http.get
@@ -95,16 +96,16 @@ update msg model =
             case result of
                 Ok source ->
                     let
-                        sections : List Section
-                        sections =
-                            sectionsFromSource model source
+                        sectionResults : List ( String, SectionResult )
+                        sectionResults =
+                            cellsFromSource source
                     in
-                    ( { model | sections = sections }
+                    ( { model | source = source, sectionResults = sectionResults }
                     , Cmd.batch
                         --[ sendToBackend (OutputToBackend "placeholder")
                         [ Http.post
                             { url = "/_x/write/pages/Page1.elm.txt"
-                            , body = stringBody "application/text" (plaintextFromSections sections)
+                            , body = stringBody "application/text" (plaintextFromSections sectionResults)
                             , expect = Http.expectWhatever WroteText
                             }
                         ]
@@ -145,44 +146,37 @@ parse source =
             deadEndsToStrings deadEnds
 
 
-sectionsFromSource : Model -> String -> List Section
-sectionsFromSource model source =
+cellsFromSource : String -> List ( String, SectionResult )
+cellsFromSource fullSource =
     let
         newSectionRegex : Regex.Regex
         newSectionRegex =
             Maybe.withDefault Regex.never <|
                 Regex.fromString "\n\n+(?=[^\\s])"
-
-        maybeEnv : Result Error Env
-        maybeEnv =
-            makeEnv source
     in
     Regex.split newSectionRegex
-        source
-        --|> List.map (\x -> "\"" ++ x ++ "\"")
-        |> List.map (parseSection model.interactiveValues maybeEnv)
-        |> (\list ->
-                case maybeEnv of
-                    Err (ParsingError deadEnds) ->
-                        ErrorSection (deadEndsToStrings deadEnds) :: list
-
-                    _ ->
-                        list
-           )
+        fullSource
+        |> List.map (\source -> ( source, parseSection source ))
 
 
-plaintextFromSections : List Section -> String
+
+--|> (\list ->
+--        case maybeEnv of
+--            Err (ParsingError deadEnds) ->
+--                ErrorSection (deadEndsToStrings deadEnds) :: list
+--
+--            _ ->
+--                list
+--   )
+
+
+plaintextFromSections : List ( String, SectionResult ) -> String
 plaintextFromSections sections =
     ""
 
 
-type Cell
-    = CellComment (Node String)
-    | CellDeclaration (Node Declaration)
-
-
-parseSection : InteractiveValues -> Result Error Env -> String -> Section
-parseSection interactiveValues maybeEnv source =
+parseSection : String -> Result (List DeadEnd) (List Cell)
+parseSection source =
     let
         parser : ParserFast.Parser (List Cell)
         parser =
@@ -197,82 +191,84 @@ parseSection interactiveValues maybeEnv source =
                     (\cell list -> cell :: list)
                     (\list -> List.reverse list)
                 )
-
-        output : Result (List DeadEnd) (List Cell)
-        output =
-            ParserFast.run parser source
-
-        isCode cell =
-            case cell of
-                CellDeclaration _ ->
-                    True
-
-                _ ->
-                    False
-
-        isComment cell =
-            case cell of
-                CellComment _ ->
-                    True
-
-                _ ->
-                    False
-
-        handleOutput result =
-            case result of
-                Ok cells ->
-                    let
-                        lastCode =
-                            List.filter isCode cells
-                                |> List.Extra.last
-                    in
-                    case lastCode of
-                        Just (CellDeclaration (Node _ declaration)) ->
-                            let
-                                expressionName =
-                                    extractNameFromDeclaration declaration
-
-                                evaluated : Result String Value
-                                evaluated =
-                                    evaluateName maybeEnv expressionName
-                            in
-                            case evaluated of
-                                Err error ->
-                                    EvaluatedSection source error
-
-                                Ok ((PartiallyApplied _ _ _ _ _) as functionDeclaration) ->
-                                    handlePartiallyApplied interactiveValues source functionDeclaration declaration
-
-                                Ok value ->
-                                    handleSuccessfulParse source value
-
-                        --EvaluatedSection source evaluated
-                        _ ->
-                            List.filter isComment cells
-                                |> List.map
-                                    (\comment ->
-                                        case comment of
-                                            CellComment (Node _ text) ->
-                                                let
-                                                    contents =
-                                                        String.dropLeft 2 text
-                                                in
-                                                if String.startsWith " " contents then
-                                                    String.dropLeft 1 contents
-
-                                                else
-                                                    contents
-
-                                            _ ->
-                                                ""
-                                    )
-                                |> String.join "\n"
-                                |> MarkdownSection
-
-                Err _ ->
-                    CodeSection source
     in
-    handleOutput output
+    ParserFast.run parser source
+
+
+handleParsedSection : InteractiveValues -> Result Error Env -> ( String, Result error (List Cell) ) -> Section
+handleParsedSection interactiveValues maybeEnv ( source, parsedSection ) =
+    case parsedSection of
+        Ok cells ->
+            let
+                lastCode : Maybe Cell
+                lastCode =
+                    List.filter isCode cells
+                        |> List.Extra.last
+
+                isCode : Cell -> Bool
+                isCode cell =
+                    case cell of
+                        CellDeclaration _ ->
+                            True
+
+                        _ ->
+                            False
+
+                isComment : Cell -> Bool
+                isComment cell =
+                    case cell of
+                        CellComment _ ->
+                            True
+
+                        _ ->
+                            False
+            in
+            case lastCode of
+                Just (CellDeclaration (Node _ declaration)) ->
+                    let
+                        expressionName : String
+                        expressionName =
+                            extractNameFromDeclaration declaration
+
+                        evaluated : Result String Value
+                        evaluated =
+                            evaluateName maybeEnv expressionName
+                    in
+                    case evaluated of
+                        Err error ->
+                            EvaluatedSection source error
+
+                        Ok ((PartiallyApplied _ _ _ _ _) as functionDeclaration) ->
+                            handlePartiallyApplied interactiveValues source functionDeclaration declaration
+
+                        Ok value ->
+                            handleSuccessfulParse source value
+
+                --EvaluatedSection source evaluated
+                _ ->
+                    List.filter isComment cells
+                        |> List.map
+                            (\comment ->
+                                case comment of
+                                    CellComment (Node _ text) ->
+                                        let
+                                            contents =
+                                                String.dropLeft 2 text
+                                        in
+                                        if String.startsWith " " contents then
+                                            String.dropLeft 1 contents
+
+                                        else
+                                            contents
+
+                                    _ ->
+                                        ""
+                            )
+                        |> String.join "\n"
+                        |> MarkdownSection
+
+        Err _ ->
+            CodeSection source
 
 
 bigAnnotationToList annotation =
@@ -396,7 +392,7 @@ interactiveElementInt =
                 , Element.Input.text
                     []
                     { onChange = InteractiveUpdated binding
-                    , text = "0"
+                    , text = Maybe.withDefault "" value
                     , placeholder = Nothing
                     , label = Element.Input.labelAbove [] (Element.text "Label")
                     }
@@ -655,7 +651,7 @@ view model =
                 -- left could be 185
                 [ Element.alignLeft, Element.paddingEach { top = 40, left = 40, right = 40, bottom = 0 } ]
                 (Element.image [ width (px 150), Element.centerX ] { src = "https://lamdera.app/lamdera-logo-black.png", description = "Lamdera logo" }
-                    :: List.map viewSection model.sections
+                    :: viewSections model
                 )
             )
         ]
@@ -663,6 +659,21 @@ view model =
     --)
     --]
     }
+
+
+viewSections : Model -> List (Element FrontendMsg)
+viewSections model =
+    let
+        maybeEnv =
+            makeEnv model.source
+
+        processSection : ( String, Result error (List Cell) ) -> Element FrontendMsg
+        processSection sectionResult =
+            sectionResult
+                |> handleParsedSection model.interactiveValues maybeEnv
+                |> viewSection
+    in
+    model.sectionResults |> List.map (Element.Lazy.lazy processSection)
 
 
 monospace : Attribute msg
