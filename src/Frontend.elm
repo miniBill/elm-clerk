@@ -2,10 +2,10 @@ module Frontend exposing (Cell(..), Model, app)
 
 import Browser exposing (UrlRequest(..))
 import Browser.Navigation as Nav
-import Dict exposing (Dict)
 import Element exposing (Attribute, Element, fill, paddingEach, px, width)
 import Element.Background
 import Element.Font as Font
+import Element.Input
 import Elm.Parser
 import Elm.Parser.Comments
 import Elm.Parser.Declarations
@@ -17,6 +17,7 @@ import Elm.Syntax.Pattern exposing (Pattern(..))
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Eval.Expression
 import Eval.Module
+import FastDict as Dict exposing (Dict)
 import Html
 import Http exposing (stringBody)
 import InterpreterTypes exposing (Env, Error(..), Value(..))
@@ -100,8 +101,8 @@ update msg model =
                     in
                     ( { model | sections = sections }
                     , Cmd.batch
-                        [ sendToBackend (OutputToBackend "placeholder")
-                        , Http.post
+                        --[ sendToBackend (OutputToBackend "placeholder")
+                        [ Http.post
                             { url = "/_x/write/pages/Page1.elm.txt"
                             , body = stringBody "application/text" (plaintextFromSections sections)
                             , expect = Http.expectWhatever WroteText
@@ -116,7 +117,11 @@ update msg model =
             ( model, Cmd.none )
 
         InteractiveUpdated name value ->
-            ( { model | interactiveValues = Dict.insert name value model.interactiveValues }, Cmd.none )
+            let
+                newDict =
+                    Dict.insert name value model.interactiveValues
+            in
+            ( { model | interactiveValues = Debug.log "Updated dict:" newDict }, Cmd.none )
 
 
 updateFromBackend : ToFrontend -> Model -> ( Model, Cmd FrontendMsg )
@@ -371,7 +376,7 @@ parseTogetherSingle ( pattern, annotation ) =
 type alias InteractiveElement =
     { key : String
     , conversion : String -> Result String Value
-    , element : String -> String -> Element FrontendMsg
+    , element : ( String, String ) -> Maybe String -> Element FrontendMsg
     }
 
 
@@ -385,8 +390,17 @@ interactiveElementInt =
     , conversion = conversion
     , element =
         \binding value ->
-            viewOutput
-                ("Int, for binding " ++ binding ++ "!")
+            Element.column []
+                [ viewOutput
+                    (Tuple.second binding ++ " : Int = " ++ Maybe.withDefault "" value)
+                , Element.Input.text
+                    []
+                    { onChange = InteractiveUpdated binding
+                    , text = "0"
+                    , placeholder = Nothing
+                    , label = Element.Input.labelAbove [] (Element.text "Label")
+                    }
+                ]
     }
 
 
@@ -402,48 +416,79 @@ viewInteractive : InteractiveValues -> String -> ( String, String ) -> Result St
 viewInteractive interactiveValues functionName ( binding, typeName ) =
     let
         maybeValue =
-            Dict.get ( functionName, binding ) interactiveValues
+            Dict.get (Debug.log "Fetching" ( functionName, binding )) (Debug.log "From" interactiveValues) |> Debug.log "Got"
     in
-    case maybeValue of
+    case Dict.get typeName typeNodeMap of
         Nothing ->
-            Err (binding ++ " - No value yet")
+            Err (binding ++ " - No way to handle type \"" ++ typeName ++ "\"")
 
-        Just value ->
-            case Dict.get typeName typeNodeMap of
-                Nothing ->
-                    Err (binding ++ " - No way to handle type \"" ++ typeName ++ "\"")
-
-                Just interactiveElement ->
-                    Ok (interactiveElement.element binding value)
+        Just interactiveElement ->
+            Ok (interactiveElement.element ( functionName, binding ) maybeValue)
 
 
 handlePartiallyApplied : InteractiveValues -> String -> Value -> Declaration -> Section
 handlePartiallyApplied interactiveValues source partiallyApplied declaration =
     case partiallyApplied of
-        PartiallyApplied env values patterns nameRef expression ->
+        PartiallyApplied env alreadyApplied patterns nameRef expression ->
             let
                 maybePairs : Result String (List ( String, String ))
                 maybePairs =
-                    parseTogether (patterns |> List.map Node.value) declaration (List.length values)
+                    parseTogether (patterns |> List.map Node.value) declaration (List.length alreadyApplied)
+
+                maybeFunctionName : Maybe String
+                maybeFunctionName =
+                    nameRef |> Maybe.map qualifiedNameRefToString
 
                 functionOutput : Result String Value
                 functionOutput =
-                    --let
-                    --zipped = List.map2 Tuple.pair parameterNames model.interactiveValues
-                    --mapFunction key value =
-                    --    value |> List.map
-                    --newEnv : Env
-                    --newEnv =
-                    --    { env
-                    --        | values = Dict.union (model.interactiveValues |> Dict.map (\key value ->
-                    --            let a : FrontendModel -> MaybeEnv -> String -> Section
-                    --            a = value in
-                    --, interactiveValues : Dict String (List InterpreterTypes.Value)
-                    --                                                        a
-                    --                                                    ) env.values
-                    --                                                }
-                    --                                        in
-                    evaluate (Ok env) expression
+                    case maybeFunctionName of
+                        Nothing ->
+                            Err "No function name"
+
+                        Just functionName ->
+                            let
+                                insertIntoValues : ( String, String ) -> Dict String Value -> Dict String Value
+                                insertIntoValues ( binding, typeName ) localValues =
+                                    let
+                                        maybeTypeNode : Maybe InteractiveElement
+                                        maybeTypeNode =
+                                            Dict.get typeName typeNodeMap
+
+                                        maybeRawValue : Maybe String
+                                        maybeRawValue =
+                                            Dict.get ( functionName, binding ) interactiveValues
+
+                                        typeNodeToValue : { a | conversion : b -> c } -> b -> c
+                                        typeNodeToValue typeNode rawValue =
+                                            typeNode.conversion rawValue
+
+                                        maybeValue : Maybe (Result String Value)
+                                        maybeValue =
+                                            Maybe.map2 typeNodeToValue maybeTypeNode maybeRawValue
+                                    in
+                                    case maybeValue of
+                                        Just (Ok value) ->
+                                            Dict.insert binding value localValues
+
+                                        _ ->
+                                            localValues
+
+                                newEnv : Env
+                                newEnv =
+                                    case maybePairs of
+                                        Err _ ->
+                                            env
+
+                                        Ok pairs ->
+                                            { env
+                                                | values =
+                                                    List.foldl
+                                                        insertIntoValues
+                                                        env.values
+                                                        pairs
+                                            }
+                            in
+                            evaluate (Ok env) expression
 
                 --debugElements : List (Element msg)
                 --debugElements =
@@ -452,10 +497,6 @@ handlePartiallyApplied interactiveValues source partiallyApplied declaration =
                 --        |> viewOutput
                 --    , viewOutput together
                 --    ]
-                maybeFunctionName : Maybe String
-                maybeFunctionName =
-                    nameRef |> Maybe.map qualifiedNameRefToString
-
                 interactiveElements : List (Element FrontendMsg)
                 interactiveElements =
                     case maybeFunctionName of

@@ -1,5 +1,6 @@
 module Backend exposing (Model, app)
 
+import FastDict as Dict
 import Lamdera exposing (ClientId, SessionId)
 import Types exposing (BackendModel, BackendMsg(..), ToBackend(..))
 
@@ -20,7 +21,7 @@ app =
 init : ( Model, Cmd BackendMsg )
 init =
     ( { message = "Hello!"
-      , placeholderOutput = ""
+      , placeholderOutput = Dict.empty
       }
     , Cmd.none
     )

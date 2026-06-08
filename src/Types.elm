@@ -2,8 +2,8 @@ module Types exposing (..)
 
 import Browser exposing (UrlRequest)
 import Browser.Navigation exposing (Key)
-import Dict exposing (Dict)
 import Element exposing (Element)
+import FastDict as Dict exposing (Dict)
 import Html exposing (Html)
 import Http
 import InterpreterTypes
@@ -25,7 +25,7 @@ type alias InteractiveValues =
 
 type alias BackendModel =
     { message : String
-    , placeholderOutput : String
+    , placeholderOutput : InteractiveValues
     }
 
 
@@ -40,7 +40,7 @@ type FrontendMsg
 
 type ToBackend
     = NoOpToBackend
-    | OutputToBackend String
+    | OutputToBackend InteractiveValues
 
 
 type BackendMsg
