@@ -20,7 +20,7 @@ import Eval.Expression
 import Eval.Module
 import FastDict as Dict exposing (Dict)
 import Html
-import Http exposing (stringBody)
+import Http
 import Interactives exposing (interactivesEmpty, interactivesGet, interactivesInsert)
 import InterpreterTypes exposing (Env, Error(..), Value(..))
 import Kernel
@@ -35,7 +35,7 @@ import ParserFast
 import Regex
 import Result.Extra
 import ToString exposing (annotationToString, deadEndsToStrings, evalErrorKindToString, patternToString)
-import Types exposing (BackendMsg(..), Cell(..), Code(..), FrontendModel, FrontendMsg(..), FullCode(..), FunctionName(..), Interactives(..), Markdown(..), OutputError(..), OutputValue(..), ParameterName(..), RawInteractiveValue(..), Section(..), SectionResult, ToBackend(..), ToFrontend(..), TypeName(..))
+import Types exposing (BackendMsg(..), Cell(..), Code(..), FrontendModel, FrontendMsg(..), FullCode(..), FunctionName(..), Interactives(..), Markdown(..), OutputError(..), OutputValue(..), ParameterName(..), ParsedSection, RawInteractiveValue(..), Section(..), ToBackend(..), ToFrontend(..), TypeName(..))
 import UI.Source as Source
 import Url
 import Value
@@ -61,7 +61,7 @@ init : Url.Url -> Nav.Key -> ( Model, Cmd FrontendMsg )
 init _ key =
     ( { key = key
       , source = FullCode ""
-      , sectionResults = []
+      , parsedSections = []
       , interactives = interactivesEmpty
       }
     , Cmd.batch
@@ -97,25 +97,16 @@ update msg model =
 
         GotText result ->
             case result of
-                Ok stringSource ->
-                    let
-                        source : FullCode
-                        source =
-                            FullCode (String.replace "\u{000D}\n" "\n" stringSource)
-
-                        sectionResults : List ( Code, SectionResult )
-                        sectionResults =
-                            cellsFromSource source
-                    in
-                    ( { model | source = source, sectionResults = sectionResults }
-                    , Cmd.batch
-                        --[ sendToBackend (OutputToBackend "placeholder")
-                        [ Http.post
-                            { url = "/_x/write/pages/Page1.elm.txt"
-                            , body = stringBody "application/text" (plaintextFromSections sectionResults)
-                            , expect = Http.expectWhatever WroteText
-                            }
-                        ]
+                Ok source ->
+                    ( { model | source = FullCode source, parsedSections = parseSections (FullCode source) }
+                    , Cmd.none
+                      --[ sendToBackend (OutputToBackend "placeholder")
+                      --[ Http.post
+                      --    { url = "/_x/write/pages/Page1.elm.txt"
+                      --    , body = stringBody "application/text" (plaintextFromSections sectionResults)
+                      --    , expect = Http.expectWhatever WroteText
+                      --    }
+                      --]
                     )
 
                 Err _ ->
@@ -143,35 +134,21 @@ updateFromBackend msg model =
 
 
 
--- PARSING AND EVALUATION
+-- PARSING TEXT INPUT
 
 
-parse : String -> List String
-parse source =
-    case Elm.Parser.parseToFile source of
-        Ok _ ->
-            [ "Ok" ]
-
-        Err deadEnds ->
-            deadEndsToStrings deadEnds
-
-
-cellsFromSource : FullCode -> List ( Code, SectionResult )
-cellsFromSource (FullCode fullSource) =
+parseSections : FullCode -> List ( Code, ParsedSection )
+parseSections (FullCode fullSource) =
     let
         newSectionRegex : Regex.Regex
         newSectionRegex =
             Maybe.withDefault Regex.never <|
                 Regex.fromString "\n\n+(?=[^\\s])"
     in
-    Regex.split newSectionRegex
-        fullSource
+    fullSource
+        |> String.replace "\u{000D}\n" "\n"
+        |> Regex.split newSectionRegex
         |> List.map (\source -> ( Code source, parseSection (Code source) ))
-
-
-plaintextFromSections : List ( Code, SectionResult ) -> String
-plaintextFromSections sections =
-    ""
 
 
 parseSection : Code -> Result (List DeadEnd) (List Cell)
@@ -194,8 +171,8 @@ parseSection (Code source) =
     ParserFast.run parser source
 
 
-handleParsedSection : Interactives -> Result Error Env -> ( Code, Result error (List Cell) ) -> Section
-handleParsedSection interactiveValues maybeEnv ( source, parsedSection ) =
+sectionFromParsed : Interactives -> Result Error Env -> ( Code, Result error (List Cell) ) -> Section
+sectionFromParsed interactiveValues maybeEnv ( source, parsedSection ) =
     case parsedSection of
         Ok cells ->
             let
@@ -221,6 +198,16 @@ handleParsedSection interactiveValues maybeEnv ( source, parsedSection ) =
 
                         _ ->
                             False
+
+                handleSuccessfulParse : Code -> Value -> Section
+                handleSuccessfulParse localSource value =
+                    case Kernel.html.fromValue value of
+                        Just html ->
+                            Kernel.Html.htmlToReal html
+                                |> HtmlSection localSource
+
+                        _ ->
+                            EvaluatedSection localSource (Value.toString value |> OutputValue |> Ok)
             in
             case lastCode of
                 Just (CellDeclaration (Node _ declaration)) ->
@@ -269,6 +256,24 @@ handleParsedSection interactiveValues maybeEnv ( source, parsedSection ) =
 
         Err _ ->
             CodeSection source
+
+
+
+-- EVALUATION
+
+
+evaluateSections : Model -> List Section
+evaluateSections model =
+    let
+        maybeEnv : Result Error Env
+        maybeEnv =
+            makeEnv model.source
+
+        evaluateSection sectionResult =
+            sectionResult
+                |> sectionFromParsed model.interactives maybeEnv
+    in
+    model.parsedSections |> List.map evaluateSection
 
 
 bigAnnotationToList : TypeAnnotation -> List TypeAnnotation
@@ -623,17 +628,6 @@ handlePartiallyApplied interactiveValues source partiallyApplied declaration =
             ErrorSection [ OutputError "Called handlePartiallyApplied with a declaration that was not a function" ]
 
 
-handleSuccessfulParse : Code -> Value -> Section
-handleSuccessfulParse source value =
-    case Kernel.html.fromValue value of
-        Just html ->
-            Kernel.Html.htmlToReal html
-                |> HtmlSection source
-
-        _ ->
-            EvaluatedSection source (Value.toString value |> OutputValue |> Ok)
-
-
 makeEnv : FullCode -> Result Error Env
 makeEnv (FullCode source) =
     let
@@ -764,7 +758,9 @@ view model =
                     , Font.color (Element.rgb255 120 120 120)
                     ]
                     (Element.text "elm-clerk")
-                    :: viewSections model
+                    :: (evaluateSections model
+                            |> List.map (Element.Lazy.lazy viewSection)
+                       )
                 )
             )
         ]
@@ -772,30 +768,6 @@ view model =
     --)
     --]
     }
-
-
-viewSections : Model -> List (Element FrontendMsg)
-viewSections model =
-    let
-        maybeEnv : FullCode -> Result Error Env
-        maybeEnv source =
-            makeEnv source
-
-        processSection : ( Code, Result error (List Cell) ) -> Element FrontendMsg
-        processSection sectionResult =
-            sectionResult
-                |> handleParsedSection model.interactives (maybeEnv model.source)
-                |> viewSection
-    in
-    model.sectionResults |> List.map (Element.Lazy.lazy processSection)
-
-
-monospace : Attribute msg
-monospace =
-    Font.family
-        [ Font.typeface "Fira Code"
-        , Font.monospace
-        ]
 
 
 viewSection : Section -> Element FrontendMsg
@@ -918,3 +890,11 @@ viewOutputValue (OutputValue output) =
         ]
         [ Element.text ("-> " ++ output) ]
         |> Element.el [ Element.paddingXY 0 3, width fill ]
+
+
+monospace : Attribute msg
+monospace =
+    Font.family
+        [ Font.typeface "Fira Code"
+        , Font.monospace
+        ]

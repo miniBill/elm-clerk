@@ -16,7 +16,7 @@ import Url exposing (Url)
 type alias FrontendModel =
     { key : Key
     , source : FullCode
-    , sectionResults : List ( Code, SectionResult )
+    , parsedSections : List ( Code, ParsedSection )
     , interactives : Interactives
     }
 
@@ -27,7 +27,7 @@ type alias BackendModel =
     }
 
 
-type alias SectionResult =
+type alias ParsedSection =
     Result (List DeadEnd) (List Cell)
 
 
