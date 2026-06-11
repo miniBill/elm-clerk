@@ -7,20 +7,12 @@ import Rope
 import Types exposing (FrontendMsg)
 
 
-applied : Int -> String
-applied repetitions =
-    repeat '[' ']' repetitions "Word"
+repeatThrice : String -> String
+repeatThrice =
+    String.repeat 3
 
+add : Int -> Int -> Int
+add a b = a + b
 
-applied2 =
-    repeatParen 5 "Bird"
-
-
-repeatParen : Int -> String -> String
-repeatParen =
-    repeat '(' ')'
-
-
-repeat : Char -> Char -> Int -> String -> String
-repeat front end repetitions body =
-    String.fromChar front ++ String.repeat repetitions body ++ String.fromChar end
+increment : Int -> Int
+increment = add 1

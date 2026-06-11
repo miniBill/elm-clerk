@@ -101,7 +101,7 @@ update msg model =
                     let
                         source : FullCode
                         source =
-                            FullCode stringSource
+                            FullCode (String.replace "\u{000D}\n" "\n" stringSource)
 
                         sectionResults : List ( Code, SectionResult )
                         sectionResults =
@@ -378,7 +378,29 @@ parseTogetherSingle ( pattern, annotation ) =
         --AsPattern (Node Pattern) (Node String)
         --ParenthesizedPattern (Node Pattern)
         ( p, a ) ->
-            Err (OutputError ("Can't handle variables of type " ++ (a |> annotationToString)))
+            Err (OutputError ("Can't handle variables of type " ++ (a |> annotationToString) ++ " with binding " ++ (p |> patternToString)))
+
+
+parseValuesTogether : List Pattern -> List Value -> Result OutputError (List ( ParameterName, Value ))
+parseValuesTogether patterns alreadyApplied =
+    List.map2 Tuple.pair patterns alreadyApplied
+        |> Result.Extra.combineMap parseValuesTogetherSingle
+        |> Result.map List.concat
+
+
+parseValuesTogetherSingle : ( Pattern, Value ) -> Result OutputError (List ( ParameterName, Value ))
+parseValuesTogetherSingle ( pattern, rootValue ) =
+    case ( pattern, rootValue ) of
+        ( TuplePattern [ firstBinding, secondBinding ], Tuple first second ) ->
+            [ ( Node.value firstBinding, first ), ( Node.value secondBinding, second ) ]
+                |> Result.Extra.combineMap parseValuesTogetherSingle
+                |> Result.map List.concat
+
+        ( VarPattern binding, value ) ->
+            Ok [ ( ParameterName binding, value ) ]
+
+        ( p, v ) ->
+            Err (OutputError ("Can't apply variables with value " ++ (v |> Value.toString) ++ " with binding " ++ (p |> patternToString)))
 
 
 type alias InteractiveElement =
@@ -498,9 +520,17 @@ handlePartiallyApplied interactiveValues source partiallyApplied declaration =
     case partiallyApplied of
         PartiallyApplied env alreadyApplied patterns nameRef expression ->
             let
+                numApplied : Int
+                numApplied =
+                    List.length alreadyApplied
+
                 maybePairs : Result OutputError (List ( ParameterName, TypeName ))
                 maybePairs =
                     parseTogether (patterns |> List.map Node.value) declaration (List.length alreadyApplied)
+
+                maybeValuePairs : Result OutputError (List ( ParameterName, Value ))
+                maybeValuePairs =
+                    parseValuesTogether (patterns |> List.map Node.value) alreadyApplied
 
                 --maybeFunctionName : Maybe FunctionName
                 --maybeFunctionName =
@@ -509,51 +539,69 @@ handlePartiallyApplied interactiveValues source partiallyApplied declaration =
                 functionName =
                     extractNameFromDeclaration declaration |> FunctionName
 
+                insertIntoEnvFromValue : ( ParameterName, Value ) -> Dict String Value -> Dict String Value
+                insertIntoEnvFromValue ( ParameterName binding, value ) localValues =
+                    Dict.insert (Debug.log "Binding from Value" binding) (Debug.log "value" value) localValues
+
+                newEnv1 : Env
+                newEnv1 =
+                    case Debug.log "maybeValuePairs" maybeValuePairs of
+                        Err _ ->
+                            env
+
+                        Ok pairs ->
+                            { env
+                                | values =
+                                    List.foldl
+                                        insertIntoEnvFromValue
+                                        env.values
+                                        pairs
+                            }
+
+                insertIntoEnvFromType : ( ParameterName, TypeName ) -> Dict String Value -> Dict String Value
+                insertIntoEnvFromType ( ParameterName binding, TypeName typeName ) localValues =
+                    let
+                        maybeTypeNode : Maybe InteractiveElement
+                        maybeTypeNode =
+                            Dict.get typeName typeNodeMap
+
+                        maybeRawValue : Maybe RawInteractiveValue
+                        maybeRawValue =
+                            interactivesGet ( functionName, ParameterName binding ) interactiveValues
+
+                        typeNodeToValue : InteractiveElement -> RawInteractiveValue -> Result OutputError Value
+                        typeNodeToValue typeNode rawValue =
+                            typeNode.conversion rawValue
+
+                        maybeValue : Maybe (Result OutputError Value)
+                        maybeValue =
+                            Maybe.map2 typeNodeToValue maybeTypeNode maybeRawValue
+                    in
+                    case maybeValue of
+                        Just (Ok value) ->
+                            Dict.insert (Debug.log "Binding from type" binding) (Debug.log "value" value) localValues
+
+                        _ ->
+                            localValues
+
+                newEnv : Env
+                newEnv =
+                    case maybePairs of
+                        Err _ ->
+                            newEnv1
+
+                        Ok pairs ->
+                            { newEnv1
+                                | values =
+                                    List.foldl
+                                        insertIntoEnvFromType
+                                        env.values
+                                        pairs
+                            }
+
                 functionOutput : Result OutputError Value
                 functionOutput =
-                    let
-                        insertIntoValues : ( ParameterName, TypeName ) -> Dict String Value -> Dict String Value
-                        insertIntoValues ( ParameterName binding, TypeName typeName ) localValues =
-                            let
-                                maybeTypeNode : Maybe InteractiveElement
-                                maybeTypeNode =
-                                    Dict.get typeName typeNodeMap
-
-                                maybeRawValue : Maybe RawInteractiveValue
-                                maybeRawValue =
-                                    interactivesGet ( functionName, ParameterName binding ) interactiveValues
-
-                                typeNodeToValue : InteractiveElement -> RawInteractiveValue -> Result OutputError Value
-                                typeNodeToValue typeNode rawValue =
-                                    typeNode.conversion rawValue
-
-                                maybeValue : Maybe (Result OutputError Value)
-                                maybeValue =
-                                    Maybe.map2 typeNodeToValue maybeTypeNode maybeRawValue
-                            in
-                            case maybeValue of
-                                Just (Ok value) ->
-                                    Dict.insert binding value localValues
-
-                                _ ->
-                                    localValues
-
-                        newEnv : Env
-                        newEnv =
-                            case maybePairs of
-                                Err _ ->
-                                    env
-
-                                Ok pairs ->
-                                    { env
-                                        | values =
-                                            List.foldl
-                                                insertIntoValues
-                                                env.values
-                                                pairs
-                                    }
-                    in
-                    evaluate (Ok newEnv) expression
+                    evaluate (Ok (Debug.log "newEnv" newEnv)) expression
 
                 --debugElements : List (Element msg)
                 --debugElements =
@@ -564,15 +612,19 @@ handlePartiallyApplied interactiveValues source partiallyApplied declaration =
                 --    ]
                 interactiveElements : Result OutputError (List (Element FrontendMsg))
                 interactiveElements =
-                    case maybePairs of
-                        Ok pairs ->
+                    case ( maybePairs, maybeValuePairs ) of
+                        ( Ok pairs, Ok _ ) ->
                             pairs
                                 |> Result.Extra.combineMap (viewInteractive interactiveValues functionName)
                                 |> Result.Extra.extract (\error -> viewOutputError error |> List.singleton)
                                 |> Ok
 
                         --|> Result.withDefault (\x -> x |> viewOutput |> List.singleton)
-                        Err error ->
+                        ( Err error, _ ) ->
+                            error
+                                |> Err
+
+                        ( _, Err error ) ->
                             error
                                 |> Err
             in
