@@ -41,6 +41,10 @@ import Url
 import Value
 
 
+
+-- MAIN
+
+
 type alias Model =
     FrontendModel
 
@@ -171,6 +175,38 @@ parseSection (Code source) =
     ParserFast.run parser source
 
 
+
+-- SECTIONS EVALUATION
+
+
+evaluateSections : Model -> List Section
+evaluateSections model =
+    let
+        maybeEnv : Result Error Env
+        maybeEnv =
+            makeEnv model.source
+
+        evaluateSection sectionResult =
+            sectionResult
+                |> sectionFromParsed model.interactives maybeEnv
+    in
+    model.parsedSections |> List.map evaluateSection
+
+
+makeEnv : FullCode -> Result Error Env
+makeEnv (FullCode source) =
+    let
+        file : Result (List DeadEnd) File
+        file =
+            Elm.Parser.parseToFile source
+
+        fileMappedError : Result Error File
+        fileMappedError =
+            Result.mapError ParsingError file
+    in
+    Result.andThen Eval.Module.buildInitialEnv fileMappedError
+
+
 sectionFromParsed : Interactives -> Result Error Env -> ( Code, Result error (List Cell) ) -> Section
 sectionFromParsed interactiveValues maybeEnv ( source, parsedSection ) =
     case parsedSection of
@@ -260,253 +296,6 @@ sectionFromParsed interactiveValues maybeEnv ( source, parsedSection ) =
 
 
 -- EVALUATION
-
-
-evaluateSections : Model -> List Section
-evaluateSections model =
-    let
-        maybeEnv : Result Error Env
-        maybeEnv =
-            makeEnv model.source
-
-        evaluateSection sectionResult =
-            sectionResult
-                |> sectionFromParsed model.interactives maybeEnv
-    in
-    model.parsedSections |> List.map evaluateSection
-
-
-bigAnnotationToList : TypeAnnotation -> List TypeAnnotation
-bigAnnotationToList annotation =
-    case annotation of
-        TypeAnnotation.FunctionTypeAnnotation first second ->
-            (first
-                |> Node.value
-            )
-                :: (second
-                        |> Node.value
-                        |> bigAnnotationToList
-                   )
-
-        other ->
-            [ other ]
-
-
-declarationArguments : Declaration -> Maybe (List Pattern)
-declarationArguments declaration =
-    case declaration of
-        FunctionDeclaration function ->
-            function
-                |> .declaration
-                |> Node.value
-                |> .arguments
-                |> List.map Node.value
-                |> Just
-
-        _ ->
-            Nothing
-
-
-declarationTypeAnnotation : Declaration -> Result OutputError TypeAnnotation
-declarationTypeAnnotation declaration =
-    case declaration of
-        FunctionDeclaration function ->
-            function
-                |> .signature
-                |> Maybe.map Ok
-                |> Maybe.withDefault (Err (OutputError "No type annotations found."))
-                |> Result.map Node.value
-                |> Result.map .typeAnnotation
-                |> Result.map Node.value
-
-        _ ->
-            Err (OutputError "Not a function declaration")
-
-
-parseTogether : List Pattern -> Declaration -> Int -> Result OutputError (List ( ParameterName, TypeName ))
-parseTogether patterns declaration numApplied =
-    declarationTypeAnnotation declaration
-        |> Result.map bigAnnotationToList
-        |> Result.andThen
-            (\ann ->
-                List.map2 Tuple.pair (List.drop numApplied patterns) ann
-                    |> Result.Extra.combineMap parseTogetherSingle
-                    |> Result.map List.concat
-            )
-
-
-parseTogetherSingle : ( Pattern, TypeAnnotation ) -> Result OutputError (List ( ParameterName, TypeName ))
-parseTogetherSingle ( pattern, annotation ) =
-    case ( pattern, annotation ) of
-        ( TuplePattern patterns, TypeAnnotation.Tupled annotations ) ->
-            List.map2 Tuple.pair (patterns |> List.map Node.value) (annotations |> List.map Node.value)
-                |> Result.Extra.combineMap parseTogetherSingle
-                |> Result.map List.concat
-
-        --( RecordPattern patterns, TypeAnnotation.Record record ) ->
-        --    Err "record not implemented"
-        --(UnConsPattern head rest, TypeAnnotation. )->
-        --ListPattern (List (Node Pattern))
-        --VarPattern String
-        ( VarPattern binding, TypeAnnotation.Typed moduleNode patterns ) ->
-            let
-                typeName : String
-                typeName =
-                    moduleNode
-                        |> Node.value
-                        |> (\( moduleName, name ) -> moduleName ++ [ name ])
-                        |> String.join "."
-
-                fullTypeName : String
-                fullTypeName =
-                    typeName
-                        :: (patterns
-                                |> List.map Node.value
-                                |> List.map annotationToString
-                           )
-                        |> String.join " "
-            in
-            Ok [ ( ParameterName binding, TypeName fullTypeName ) ]
-
-        --NamedPattern QualifiedNameRef (List (Node Pattern))
-        --AsPattern (Node Pattern) (Node String)
-        --ParenthesizedPattern (Node Pattern)
-        ( p, a ) ->
-            Err (OutputError ("Can't handle variables of type " ++ (a |> annotationToString) ++ " with binding " ++ (p |> patternToString)))
-
-
-parseValuesTogether : List Pattern -> List Value -> Result OutputError (List ( ParameterName, Value ))
-parseValuesTogether patterns alreadyApplied =
-    List.map2 Tuple.pair patterns alreadyApplied
-        |> Result.Extra.combineMap parseValuesTogetherSingle
-        |> Result.map List.concat
-
-
-parseValuesTogetherSingle : ( Pattern, Value ) -> Result OutputError (List ( ParameterName, Value ))
-parseValuesTogetherSingle ( pattern, rootValue ) =
-    case ( pattern, rootValue ) of
-        ( TuplePattern [ firstBinding, secondBinding ], Tuple first second ) ->
-            [ ( Node.value firstBinding, first ), ( Node.value secondBinding, second ) ]
-                |> Result.Extra.combineMap parseValuesTogetherSingle
-                |> Result.map List.concat
-
-        ( VarPattern binding, value ) ->
-            Ok [ ( ParameterName binding, value ) ]
-
-        ( p, v ) ->
-            Err (OutputError ("Can't apply variables with value " ++ (v |> Value.toString) ++ " with binding " ++ (p |> patternToString)))
-
-
-type alias InteractiveElement =
-    { key : TypeName
-    , conversion : RawInteractiveValue -> Result OutputError Value
-    , element : ( FunctionName, ParameterName ) -> Maybe RawInteractiveValue -> Element FrontendMsg
-    }
-
-
-interactiveElementInt : InteractiveElement
-interactiveElementInt =
-    let
-        conversion : RawInteractiveValue -> Result OutputError Value
-        conversion (RawInteractiveValue text) =
-            text
-                |> String.toInt
-                |> Result.fromMaybe "Couldn't parse!"
-                |> Result.map Kernel.int.toValue
-                |> Result.mapError OutputError
-    in
-    { key = TypeName "Int"
-    , conversion = conversion
-    , element = textElement "Int"
-    }
-
-
-textElement typeName ( functionName, ParameterName parameterName ) maybeRawValue =
-    let
-        maybeValue =
-            maybeRawValue |> Maybe.map (\(RawInteractiveValue x) -> x)
-    in
-    Element.row [ Element.padding 6 ]
-        [ Element.Input.text
-            []
-            { onChange = \x -> InteractiveUpdated ( functionName, ParameterName parameterName ) (RawInteractiveValue x)
-            , text = Maybe.withDefault "" maybeValue
-            , placeholder = Nothing
-            , label = Element.Input.labelAbove [ monospace ] (Element.text (parameterName ++ " : " ++ typeName ++ " = " ++ Maybe.withDefault "" maybeValue))
-            }
-        ]
-
-
-interactiveElementChar : InteractiveElement
-interactiveElementChar =
-    let
-        conversion : RawInteractiveValue -> Result OutputError Value
-        conversion (RawInteractiveValue text) =
-            (if String.length text == 1 then
-                String.toList text |> List.head
-
-             else
-                Nothing
-            )
-                |> Result.fromMaybe "Not exactly one character"
-                |> Result.map Kernel.char.toValue
-                |> Result.mapError OutputError
-    in
-    { key = TypeName "Char"
-    , conversion = conversion
-    , element = textElement "Char"
-    }
-
-
-interactiveElementString : InteractiveElement
-interactiveElementString =
-    let
-        conversion : RawInteractiveValue -> Result OutputError Value
-        conversion (RawInteractiveValue text) =
-            text
-                |> Kernel.string.toValue
-                |> Ok
-    in
-    { key = TypeName "String"
-    , conversion = conversion
-    , element = textElement "String"
-    }
-
-
-typeNodeMap : Dict String InteractiveElement
-typeNodeMap =
-    [ interactiveElementInt
-    , interactiveElementChar
-    , interactiveElementString
-    ]
-        |> List.map
-            (\x ->
-                ( let
-                    (TypeName key) =
-                        x.key
-                  in
-                  key
-                , x
-                )
-            )
-        |> Dict.fromList
-
-
-viewInteractive : Interactives -> FunctionName -> ( ParameterName, TypeName ) -> Result OutputError (Element FrontendMsg)
-viewInteractive interactiveValues functionName ( binding, TypeName typeName ) =
-    let
-        maybeValue =
-            interactivesGet ( functionName, binding ) interactiveValues
-
-        (ParameterName bindingString) =
-            binding
-    in
-    case Dict.get typeName typeNodeMap of
-        Nothing ->
-            Err (OutputError (bindingString ++ " - No way to handle type \"" ++ typeName ++ "\""))
-
-        Just interactiveElement ->
-            Ok (interactiveElement.element ( functionName, binding ) maybeValue)
 
 
 handlePartiallyApplied : Interactives -> Code -> Value -> Declaration -> Section
@@ -599,7 +388,6 @@ handlePartiallyApplied interactiveValues source partiallyApplied declaration =
                                 |> Result.Extra.extract (\error -> viewOutputError error |> List.singleton)
                                 |> Ok
 
-                        --|> Result.withDefault (\x -> x |> viewOutput |> List.singleton)
                         ( Err error, _ ) ->
                             error
                                 |> Err
@@ -615,31 +403,15 @@ handlePartiallyApplied interactiveValues source partiallyApplied declaration =
                 Ok elements ->
                     case functionOutput of
                         Ok functionOutputOk ->
-                            --EvaluatedSection source (functionDeclarationToString functionDeclaration)
                             InteractiveSection source
                                 elements
                                 (Value.toString functionOutputOk |> OutputValue |> Ok)
 
                         Err functionOutputError ->
-                            --EvaluatedSection source (functionDeclarationToString functionDeclaration)
                             InteractiveSection source elements (Err functionOutputError)
 
         _ ->
             ErrorSection [ OutputError "Called handlePartiallyApplied with a declaration that was not a function" ]
-
-
-makeEnv : FullCode -> Result Error Env
-makeEnv (FullCode source) =
-    let
-        file : Result (List DeadEnd) File
-        file =
-            Elm.Parser.parseToFile source
-
-        fileMappedError : Result Error File
-        fileMappedError =
-            Result.mapError ParsingError file
-    in
-    Result.andThen Eval.Module.buildInitialEnv fileMappedError
 
 
 evaluateName : Result Error Env -> FunctionName -> Result OutputError Value
@@ -697,6 +469,236 @@ evaluate maybeEnv expressionNode =
     module_run |> Result.mapError error_to_string |> Result.mapError OutputError
 
 
+
+-- PARSE TOGETHER
+
+
+parseTogether : List Pattern -> Declaration -> Int -> Result OutputError (List ( ParameterName, TypeName ))
+parseTogether patterns declaration numApplied =
+    declarationTypeAnnotation declaration
+        |> Result.map bigAnnotationToList
+        |> Result.andThen
+            (\ann ->
+                List.map2 Tuple.pair (List.drop numApplied patterns) ann
+                    |> Result.Extra.combineMap parseTogetherSingle
+                    |> Result.map List.concat
+            )
+
+
+parseTogetherSingle : ( Pattern, TypeAnnotation ) -> Result OutputError (List ( ParameterName, TypeName ))
+parseTogetherSingle ( pattern, annotation ) =
+    case ( pattern, annotation ) of
+        ( TuplePattern patterns, TypeAnnotation.Tupled annotations ) ->
+            List.map2 Tuple.pair (patterns |> List.map Node.value) (annotations |> List.map Node.value)
+                |> Result.Extra.combineMap parseTogetherSingle
+                |> Result.map List.concat
+
+        --( RecordPattern patterns, TypeAnnotation.Record record ) ->
+        --    Err "record not implemented"
+        --(UnConsPattern head rest, TypeAnnotation. )->
+        --ListPattern (List (Node Pattern))
+        --VarPattern String
+        ( VarPattern binding, TypeAnnotation.Typed moduleNode patterns ) ->
+            let
+                typeName : String
+                typeName =
+                    moduleNode
+                        |> Node.value
+                        |> (\( moduleName, name ) -> moduleName ++ [ name ])
+                        |> String.join "."
+
+                fullTypeName : String
+                fullTypeName =
+                    typeName
+                        :: (patterns
+                                |> List.map Node.value
+                                |> List.map annotationToString
+                           )
+                        |> String.join " "
+            in
+            Ok [ ( ParameterName binding, TypeName fullTypeName ) ]
+
+        --NamedPattern QualifiedNameRef (List (Node Pattern))
+        --AsPattern (Node Pattern) (Node String)
+        --ParenthesizedPattern (Node Pattern)
+        ( p, a ) ->
+            Err (OutputError ("Can't handle variables of type " ++ (a |> annotationToString) ++ " with binding " ++ (p |> patternToString)))
+
+
+parseValuesTogether : List Pattern -> List Value -> Result OutputError (List ( ParameterName, Value ))
+parseValuesTogether patterns alreadyApplied =
+    List.map2 Tuple.pair patterns alreadyApplied
+        |> Result.Extra.combineMap parseValuesTogetherSingle
+        |> Result.map List.concat
+
+
+parseValuesTogetherSingle : ( Pattern, Value ) -> Result OutputError (List ( ParameterName, Value ))
+parseValuesTogetherSingle ( pattern, rootValue ) =
+    case ( pattern, rootValue ) of
+        ( TuplePattern [ firstBinding, secondBinding ], Tuple first second ) ->
+            [ ( Node.value firstBinding, first ), ( Node.value secondBinding, second ) ]
+                |> Result.Extra.combineMap parseValuesTogetherSingle
+                |> Result.map List.concat
+
+        ( VarPattern binding, value ) ->
+            Ok [ ( ParameterName binding, value ) ]
+
+        ( p, v ) ->
+            Err (OutputError ("Can't apply variables with value " ++ (v |> Value.toString) ++ " with binding " ++ (p |> patternToString)))
+
+
+
+-- INTERACTIVE
+
+
+viewInteractive : Interactives -> FunctionName -> ( ParameterName, TypeName ) -> Result OutputError (Element FrontendMsg)
+viewInteractive interactiveValues functionName ( binding, TypeName typeName ) =
+    let
+        maybeValue =
+            interactivesGet ( functionName, binding ) interactiveValues
+
+        (ParameterName bindingString) =
+            binding
+    in
+    case Dict.get typeName typeNodeMap of
+        Nothing ->
+            Err (OutputError (bindingString ++ " - No way to handle type \"" ++ typeName ++ "\""))
+
+        Just interactiveElement ->
+            Ok (interactiveElement.element ( functionName, binding ) maybeValue)
+
+
+typeNodeMap : Dict String InteractiveElement
+typeNodeMap =
+    [ interactiveElementInt
+    , interactiveElementChar
+    , interactiveElementString
+    ]
+        |> List.map
+            (\x ->
+                ( let
+                    (TypeName key) =
+                        x.key
+                  in
+                  key
+                , x
+                )
+            )
+        |> Dict.fromList
+
+
+type alias InteractiveElement =
+    { key : TypeName
+    , conversion : RawInteractiveValue -> Result OutputError Value
+    , element : ( FunctionName, ParameterName ) -> Maybe RawInteractiveValue -> Element FrontendMsg
+    }
+
+
+textElement typeName ( functionName, ParameterName parameterName ) maybeRawValue =
+    let
+        maybeValue =
+            maybeRawValue |> Maybe.map (\(RawInteractiveValue x) -> x)
+    in
+    Element.row [ Element.padding 6 ]
+        [ Element.Input.text
+            []
+            { onChange = \x -> InteractiveUpdated ( functionName, ParameterName parameterName ) (RawInteractiveValue x)
+            , text = Maybe.withDefault "" maybeValue
+            , placeholder = Nothing
+            , label = Element.Input.labelAbove [ monospace ] (Element.text (parameterName ++ " : " ++ typeName ++ " = " ++ Maybe.withDefault "" maybeValue))
+            }
+        ]
+
+
+interactiveElementInt : InteractiveElement
+interactiveElementInt =
+    let
+        conversion : RawInteractiveValue -> Result OutputError Value
+        conversion (RawInteractiveValue text) =
+            text
+                |> String.toInt
+                |> Result.fromMaybe "Couldn't parse!"
+                |> Result.map Kernel.int.toValue
+                |> Result.mapError OutputError
+    in
+    { key = TypeName "Int"
+    , conversion = conversion
+    , element = textElement "Int"
+    }
+
+
+interactiveElementChar : InteractiveElement
+interactiveElementChar =
+    let
+        conversion : RawInteractiveValue -> Result OutputError Value
+        conversion (RawInteractiveValue text) =
+            (if String.length text == 1 then
+                String.toList text |> List.head
+
+             else
+                Nothing
+            )
+                |> Result.fromMaybe "Not exactly one character"
+                |> Result.map Kernel.char.toValue
+                |> Result.mapError OutputError
+    in
+    { key = TypeName "Char"
+    , conversion = conversion
+    , element = textElement "Char"
+    }
+
+
+interactiveElementString : InteractiveElement
+interactiveElementString =
+    let
+        conversion : RawInteractiveValue -> Result OutputError Value
+        conversion (RawInteractiveValue text) =
+            text
+                |> Kernel.string.toValue
+                |> Ok
+    in
+    { key = TypeName "String"
+    , conversion = conversion
+    , element = textElement "String"
+    }
+
+
+
+-- UTILITIES
+
+
+bigAnnotationToList : TypeAnnotation -> List TypeAnnotation
+bigAnnotationToList annotation =
+    case annotation of
+        TypeAnnotation.FunctionTypeAnnotation first second ->
+            (first
+                |> Node.value
+            )
+                :: (second
+                        |> Node.value
+                        |> bigAnnotationToList
+                   )
+
+        other ->
+            [ other ]
+
+
+declarationTypeAnnotation : Declaration -> Result OutputError TypeAnnotation
+declarationTypeAnnotation declaration =
+    case declaration of
+        FunctionDeclaration function ->
+            function
+                |> .signature
+                |> Maybe.map Ok
+                |> Maybe.withDefault (Err (OutputError "No type annotations found."))
+                |> Result.map Node.value
+                |> Result.map .typeAnnotation
+                |> Result.map Node.value
+
+        _ ->
+            Err (OutputError "Not a function declaration")
+
+
 extractNameFromDeclaration : Declaration -> String
 extractNameFromDeclaration declaration =
     case declaration of
@@ -721,6 +723,21 @@ extractNameFromDeclaration declaration =
 
         Destructuring _ _ ->
             "destructuring"
+
+
+declarationArguments : Declaration -> Maybe (List Pattern)
+declarationArguments declaration =
+    case declaration of
+        FunctionDeclaration function ->
+            function
+                |> .declaration
+                |> Node.value
+                |> .arguments
+                |> List.map Node.value
+                |> Just
+
+        _ ->
+            Nothing
 
 
 
