@@ -7,6 +7,7 @@ import InterpreterTypes exposing (Value)
 import Kernel
 import Rope
 import Types exposing (FrontendMsg)
+import Value
 
 
 viewers : List ( String, Value -> Maybe (Html never) )
@@ -16,20 +17,54 @@ viewers =
             Kernel.int.fromValue value
                 |> Maybe.map
                     (\number ->
-                        String.fromInt number |> Html.text
+                        if number > 0 then
+                            "white"
+
+                        else
+                            "black"
+                    )
+                |> Maybe.map
+                    (\color ->
+                        Html.div
+                            [ style "display" "inline-block"
+                            , style "width" "16px"
+                            , style "height" "16px"
+                            , style "border-style" "solid"
+                            , style "border-color" "black"
+                            , style "background-color" color
+                            ]
+                            []
                     )
       )
     ]
 
 
-viewerTest : Html never
-viewerTest =
-    Html.div [ style "display" "inline-block", style "background-color" "black", style "width" "16px", style "height" "16px" ] []
+square : String -> Html never
+square color =
+    Html.div
+        [ style "display" "inline-block"
+        , style "width" "16px"
+        , style "height" "16px"
+        , style "border-style" "solid"
+        , style "border-color" "black"
+        , style "background-color" color
+        ]
+        []
 
 
-viewerTest2 : String -> Html never
-viewerTest2 color =
-    Html.div [ style "display" "inline-block", style "background-color" color, style "width" "16px", style "height" "16px" ] []
+blackSquare : Html never
+blackSquare =
+    square "black"
+
+
+black : Int
+black =
+    0
+
+
+white : Int
+white =
+    1
 
 
 repeatThrice : String -> String

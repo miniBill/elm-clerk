@@ -659,7 +659,7 @@ evalRecord fields cfg env =
 
 kernelFunctions : Dict ModuleName (Dict String ( Int, List Value -> Eval Value ))
 kernelFunctions =
-    Kernel.functions evalFunction
+    Kernel.functionList evalFunction
 
 
 evalFunction : Kernel.EvalFunction

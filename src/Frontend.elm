@@ -4,7 +4,7 @@ import Browser exposing (UrlRequest(..))
 import Browser.Navigation as Nav
 import Chart as C
 import Chart.Attributes as CA
-import Element exposing (Attribute, Element, clipX, el, fill, height, maximum, minimum, paddingEach, paragraph, px, scrollbarY, shrink, text, width)
+import Element exposing (Attribute, Element, clipX, el, fill, height, maximum, minimum, paddingEach, paragraph, px, scrollbarX, scrollbarY, shrink, text, width)
 import Element.Background
 import Element.Font as Font
 import Element.Input
@@ -25,11 +25,11 @@ import Html
 import Html.Attributes exposing (style)
 import Http
 import Interactives exposing (interactivesEmpty, interactivesGet, interactivesInsert)
-import InterpreterTypes exposing (Env, Error(..), Value(..))
+import InterpreterTypes exposing (Env, Error(..), Eval, Value(..))
 import Kernel
 import Kernel.Html
 import Lamdera exposing (sendToBackend)
-import List.Extra
+import List.Extra exposing (Step(..))
 import Markdown.Parser
 import Markdown.Renderer
 import Markdown.Renderer.ElmUi
@@ -39,7 +39,7 @@ import Process
 import Regex
 import Result.Extra
 import Task
-import ToString exposing (annotationToString, deadEndsToStrings, evalErrorKindToString, patternToString)
+import ToString exposing (annotationToString, deadEndsToStrings, errorToString, evalErrorDataToString, evalErrorKindToString, patternToString)
 import Types exposing (BackendMsg(..), Cell(..), Code(..), FrontendModel, FrontendMsg(..), FullCode(..), FunctionName(..), Interactives(..), Markdown(..), OutputError(..), OutputValue(..), ParameterName(..), ParsedSection, RawInteractiveValue(..), Section(..), ToBackend(..), ToFrontend(..), TypeName(..))
 import UI.Source as Source
 import Url
@@ -133,7 +133,7 @@ update msg model =
             ( { model | inputInteractives = newInteractives }
             , Cmd.batch
                 [ sendToBackend (InteractivesToBackend newInteractives)
-                , notifyIn ReloadCode 10
+                , notifyIn ReloadCode 100
                 ]
             )
 
@@ -199,18 +199,67 @@ parseSection (Code source) =
 -- SECTIONS EVALUATION
 
 
-evaluateSections : Model -> List Section
+type alias Viewer =
+    Value -> Result OutputError (Maybe (Html.Html FrontendMsg))
+
+
+evaluateSections : Model -> ( List ( String, Viewer ), List Section )
 evaluateSections model =
     let
         maybeEnv : Result Error Env
         maybeEnv =
             makeEnv model.source
 
+        viewerSelector : Kernel.InSelector (List ( String, Value -> InterpreterTypes.Config -> Env -> InterpreterTypes.EvalResult (Maybe Kernel.Html.Html) )) {}
+        viewerSelector =
+            Kernel.listIn (Kernel.tupleIn Kernel.string (Kernel.function Eval.Expression.evalFunction Kernel.anything Kernel.to (Kernel.maybe Kernel.html)))
+
+        viewersValue : Result OutputError Value
+        viewersValue =
+            evaluateName maybeEnv (FunctionName "viewers")
+
+        transformValue : (Value -> InterpreterTypes.Config -> Env -> InterpreterTypes.EvalResult (Maybe Kernel.Html.Html)) -> Viewer
+        transformValue func =
+            case maybeEnv of
+                Err error ->
+                    \_ ->
+                        error
+                            |> errorToString
+                            |> OutputError
+                            |> Err
+
+                Ok env ->
+                    \value ->
+                        func value { trace = False } env
+                            |> (\( a, _, _ ) -> a)
+                            |> Result.mapError evalErrorDataToString
+                            |> Result.mapError OutputError
+                            |> Result.map (\maybe -> Maybe.map Kernel.Html.htmlToReal maybe)
+
+        viewers : List ( String, Viewer )
+        viewers =
+            viewersValue
+                |> Result.toMaybe
+                |> Maybe.andThen viewerSelector.fromValue
+                |> Maybe.withDefault []
+                |> List.map (\pair -> pair |> Tuple.mapSecond transformValue)
+
+        --List Value
+        ---> List (Node Pattern)
+        ---> Maybe QualifiedNameRef
+        ---> Node Expression
+        ---> Eval Value
+        evaluateSection : ( Code, Result error (List Cell) ) -> Section
         evaluateSection sectionResult =
             sectionResult
                 |> sectionFromParsed model.evalInteractives model.inputInteractives maybeEnv
     in
-    model.parsedSections |> List.map evaluateSection
+    case viewersValue of
+        Err error ->
+            ( viewers, ErrorSection [ OutputError "\"viewers\" failed to evaluate:", error ] :: (model.parsedSections |> List.map evaluateSection) )
+
+        Ok _ ->
+            ( viewers, ErrorSection [ OutputError ("All is ok. Viewers: " ++ String.join ", " (List.map Tuple.first viewers)) ] :: (model.parsedSections |> List.map evaluateSection) )
 
 
 makeEnv : FullCode -> Result Error Env
@@ -451,8 +500,8 @@ evaluateName maybeEnv (FunctionName expressionName) =
 evaluate : Result Error Env -> Node Expression -> Result OutputError Value
 evaluate maybeEnv expressionNode =
     let
-        module_run : Result Error Value
-        module_run =
+        moduleRun : Result Error Value
+        moduleRun =
             case maybeEnv of
                 Err e ->
                     Err e
@@ -466,25 +515,8 @@ evaluate maybeEnv expressionNode =
                                 env
                     in
                     Result.mapError InterpreterTypes.EvalError result
-
-        error_to_string : Error -> String
-        error_to_string error =
-            case error of
-                ParsingError deadends ->
-                    deadEndsToStrings deadends
-                        |> String.join "\n"
-
-                EvalError errorData ->
-                    (errorData.callStack
-                        |> List.map
-                            (\nameRef -> String.join "." (nameRef.moduleName ++ [ nameRef.name ]))
-                    )
-                        ++ [ "" ]
-                        ++ [ evalErrorKindToString errorData.error ]
-                        |> (\list -> "Call stack:" :: list)
-                        |> String.join "\n"
     in
-    module_run |> Result.mapError error_to_string |> Result.mapError OutputError
+    moduleRun |> Result.mapError errorToString |> Result.mapError OutputError
 
 
 
@@ -767,16 +799,16 @@ view model =
                     , Font.color (Element.rgb255 120 120 120)
                     ]
                     (Element.text "elm-clerk")
-                    :: (evaluateSections model
-                            |> List.map (Element.Lazy.lazy viewSection)
-                       )
-                    ++ [ Element.html <|
-                            Html.div [ style "display" "inline-block", style "background-color" "black", style "width" "16px", style "height" "16px" ] []
-                       ]
+                    :: (evaluateSections model |> viewSections)
                 )
             )
         ]
     }
+
+
+viewSections : ( List ( String, Viewer ), List Section ) -> List (Element FrontendMsg)
+viewSections ( viewers, sections ) =
+    sections |> List.map (Element.Lazy.lazy (viewSection viewers))
 
 
 viewChart : Element msg
@@ -801,33 +833,73 @@ viewChart =
                 ]
 
 
-viewSection : Section -> Element FrontendMsg
-viewSection section =
+viewCode : Code -> Element msg
+viewCode (Code code) =
+    Element.el [ width maxWidth ] <|
+        Source.viewExpression [ scrollbarX ]
+            { highlight = Nothing
+            , buttons = []
+            , source = code
+            }
+
+
+viewSection : List ( String, Viewer ) -> Section -> Element FrontendMsg
+viewSection viewers section =
     let
-        syntaxHighlight : Code -> Element msg
-        syntaxHighlight (Code code) =
-            Source.viewExpression []
-                { highlight = Nothing
-                , buttons = []
-                , source = code
-                }
+        applyViewer : Value -> Result OutputError (Maybe (Html.Html FrontendMsg))
+        applyViewer value =
+            let
+                encoded =
+                    Kernel.encodedValue.toValue value
+            in
+            List.Extra.stoppableFoldl
+                (\( viewerType, viewer ) _ ->
+                    case viewer encoded of
+                        Ok Nothing ->
+                            Continue (Ok Nothing)
+
+                        Ok (Just transformed) ->
+                            Stop (Ok (Just transformed))
+
+                        Err error ->
+                            -- TODO show this error
+                            Stop (Err error)
+                )
+                (Ok Nothing)
+                viewers
+
+        transform : Result OutputError OutputValue -> Result OutputError OutputValue
+        transform valueResult =
+            case valueResult of
+                Err _ ->
+                    Err (OutputError "10")
+
+                --valueResult
+                Ok (OutputHtml _) ->
+                    valueResult
+
+                Ok (OutputValue value) ->
+                    case applyViewer value of
+                        Err error ->
+                            Err error
+
+                        Ok (Just html) ->
+                            Ok (OutputHtml html)
+
+                        Ok Nothing ->
+                            Ok (OutputValue value)
     in
-    --Html.div []
-    --    [ Html.div
-    --        [ Attr.style "font-family" "sans-serif"
-    --        , Attr.style "padding-top" "10px"
-    --        ]
     Element.column [ width fill, paddingEach { top = 10, right = 0, bottom = 0, left = 0 } ]
         (case section of
             MarkdownSection markdown ->
                 [ viewMarkdownHtml markdown ]
 
             CodeSection code ->
-                [ syntaxHighlight code ]
+                [ viewCode code ]
 
             EvaluatedSection code output ->
-                [ syntaxHighlight code
-                , case output of
+                [ viewCode code
+                , case transform output of
                     Ok value ->
                         viewOutputValue value
 
@@ -836,14 +908,14 @@ viewSection section =
                 ]
 
             InteractiveSection code elements output ->
-                [ syntaxHighlight code
+                [ viewCode code
                 , Element.row
                     [ width fill
                     , Element.Background.color (Element.rgb255 240 240 240)
                     , Element.paddingXY (graySidePadding - 9) 0
                     ]
                     elements
-                , case output of
+                , case transform output of
                     Ok value ->
                         viewOutputValue value
 
@@ -896,15 +968,27 @@ viewMarkdown markdown =
 
 
 viewOutputValue : OutputValue -> Element FrontendMsg
-viewOutputValue (OutputValue value) =
-    case Kernel.html.fromValue value of
-        Just html ->
-            Kernel.Html.htmlToReal html
+viewOutputValue outputValue =
+    let
+        viewHtml : Html.Html FrontendMsg -> Element FrontendMsg
+        viewHtml html =
+            html
                 |> Element.html
                 |> Element.el [ Element.paddingEach { top = 12, right = graySidePadding, bottom = 4, left = graySidePadding } ]
+    in
+    case outputValue of
+        OutputHtml html ->
+            viewHtml html
 
-        _ ->
-            viewOutput ("-> " ++ Value.toString value)
+        OutputValue value ->
+            case Kernel.html.fromValue value of
+                Just html ->
+                    html
+                        |> Kernel.Html.htmlToReal
+                        |> viewHtml
+
+                _ ->
+                    viewOutput ("-> " ++ Value.toString value)
 
 
 viewOutputError : OutputError -> Element FrontendMsg

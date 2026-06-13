@@ -4,7 +4,7 @@ import Elm.Syntax.Expression exposing (Expression(..))
 import Elm.Syntax.Node as Node exposing (Node(..))
 import Elm.Syntax.Pattern exposing (Pattern(..), QualifiedNameRef)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
-import InterpreterTypes exposing (Value(..))
+import InterpreterTypes exposing (Error(..), EvalErrorData, Value(..))
 import Parser exposing (DeadEnd)
 import Value
 
@@ -29,6 +29,29 @@ qualifiedNameRefToString name =
     name.moduleName
         ++ [ name.name ]
         |> String.join "."
+
+
+evalErrorDataToString : EvalErrorData -> String
+evalErrorDataToString errorData =
+    (errorData.callStack
+        |> List.map
+            (\nameRef -> String.join "." (nameRef.moduleName ++ [ nameRef.name ]))
+    )
+        ++ [ "" ]
+        ++ [ evalErrorKindToString errorData.error ]
+        |> (\list -> "Call stack:" :: list)
+        |> String.join "\n"
+
+
+errorToString : Error -> String
+errorToString error =
+    case error of
+        ParsingError deadends ->
+            deadEndsToStrings deadends
+                |> String.join "\n"
+
+        EvalError errorData ->
+            evalErrorDataToString errorData
 
 
 functionDeclarationToString : Value -> String
@@ -205,6 +228,7 @@ annotationToString annotation =
                 ++ (second |> Node.value |> annotationToString)
 
 
+patternToString : Pattern -> String
 patternToString pattern =
     case pattern of
         AllPattern ->
@@ -282,6 +306,7 @@ patternToString pattern =
             "(" ++ (inner |> Node.value |> patternToString) ++ ")"
 
 
+patternToStringDebug : Pattern -> String
 patternToStringDebug pattern =
     case pattern of
         AllPattern ->
@@ -359,6 +384,7 @@ patternToStringDebug pattern =
             "ParenPattern (" ++ (inner |> Node.value |> patternToStringDebug) ++ ")"
 
 
+expressionToString : Expression -> String
 expressionToString expression =
     case expression of
         UnitExpr ->

@@ -1,4 +1,4 @@
-module Kernel exposing (EvalFunction, InSelector, OutSelector, Selector, To, char, functions, html, int, string)
+module Kernel exposing (EvalFunction, InSelector, OutSelector, Selector, To, anything, char, encodedValue, four, function, functionList, html, int, list, listIn, maybe, one, string, three, to, tuple, tupleIn, two)
 
 import Array exposing (Array)
 import Bitwise
@@ -37,8 +37,8 @@ type alias EvalFunction =
     -> Eval Value
 
 
-functions : EvalFunction -> Dict ModuleName (Dict String ( Int, List Value -> Eval Value ))
-functions evalFunction =
+functionList : EvalFunction -> Dict ModuleName (Dict String ( Int, List Value -> Eval Value ))
+functionList evalFunction =
     [ -- Elm.Kernel.Basics
       ( [ "Elm", "Kernel", "Basics" ]
       , [ ( "acos", one float to float acos Core.Basics.acos )
@@ -365,8 +365,8 @@ maybe selector =
     }
 
 
-list : Selector a -> Selector (List a)
-list selector =
+listIn : InSelector a inner -> InSelector (List a) {}
+listIn selector =
     { fromValue =
         \value ->
             case value of
@@ -375,13 +375,24 @@ list selector =
 
                 _ ->
                     Nothing
-    , toValue =
+    , name = "List " ++ selector.name
+    }
+
+
+listOut : OutSelector a inner -> OutSelector (List a) {}
+listOut selector =
+    { toValue =
         \value ->
             value
                 |> List.map selector.toValue
                 |> List
     , name = "List " ++ selector.name
     }
+
+
+list : Selector a -> Selector (List a)
+list selector =
+    combinedInOut (listIn selector) (listOut selector)
 
 
 anyList : Selector (List Value)
@@ -418,6 +429,67 @@ jsArray selector =
                 |> Array.map selector.toValue
                 |> JsArray
     , name = "JsArray " ++ selector.name
+    }
+
+
+encodedValue : Selector Value
+encodedValue =
+    let
+        fromValue : Value -> Maybe Value
+        fromValue value =
+            Nothing
+
+        --case value of
+        --    Custom moduleName name values ->
+        --        Just name
+        --
+        --    _ ->
+        --        Nothing
+        toValue : Value -> Value
+        toValue value =
+            case value of
+                String item ->
+                    Custom [] "String" [ string.toValue item ]
+
+                Int item ->
+                    Custom [] "Int" [ int.toValue item ]
+
+                Float item ->
+                    Custom [] "Float" [ float.toValue item ]
+
+                Char item ->
+                    Custom [] "Char" [ char.toValue item ]
+
+                Bool item ->
+                    Custom [] "Bool" [ bool.toValue item ]
+
+                Unit ->
+                    Custom [] "Unit" []
+
+                Tuple first second ->
+                    Custom [] "Tuple" [ toValue first, toValue second ]
+
+                Triple first second third ->
+                    Custom [] "Triple" [ toValue first, toValue second, toValue third ]
+
+                Record dict ->
+                    Custom [] "Record" []
+
+                Custom moduleName name values ->
+                    Custom [] "Custom" [ (list string).toValue moduleName, string.toValue name, (list encodedValue).toValue values ]
+
+                PartiallyApplied env values nodes maybeQualifiedNameRef node ->
+                    Custom [] "PartiallyApplied" []
+
+                JsArray array ->
+                    Custom [] "JsArray" []
+
+                List values ->
+                    Custom [] "List" [ (list encodedValue).toValue values ]
+    in
+    { fromValue = fromValue
+    , toValue = toValue
+    , name = "Encoded Value"
     }
 
 
@@ -471,8 +543,12 @@ function2 evalFunction in1Selector in2Selector _ outSelector =
     function evalFunction in1Selector to (function evalFunction in2Selector to outSelector)
 
 
-tuple : Selector a -> Selector b -> Selector ( a, b )
-tuple firstSelector secondSelector =
+
+--tupleIn : { a | fromValue : Value -> Maybe b, name : String } -> { c | fromValue : Value -> Maybe d, name : String } -> { fromValue : Value -> Maybe (b, d), name : String }
+
+
+tupleIn : InSelector a inner1 -> InSelector b inner2 -> InSelector ( a, b ) {}
+tupleIn firstSelector secondSelector =
     { fromValue =
         \value ->
             case value of
@@ -481,11 +557,22 @@ tuple firstSelector secondSelector =
 
                 _ ->
                     Nothing
-    , toValue =
+    , name = "( " ++ firstSelector.name ++ ", " ++ secondSelector.name ++ ")"
+    }
+
+
+tupleOut : OutSelector a inner1 -> OutSelector b inner2 -> OutSelector ( a, b ) {}
+tupleOut firstSelector secondSelector =
+    { toValue =
         \( first, second ) ->
             Tuple (firstSelector.toValue first) (secondSelector.toValue second)
     , name = "( " ++ firstSelector.name ++ ", " ++ secondSelector.name ++ ")"
     }
+
+
+tuple : Selector a -> Selector b -> Selector ( a, b )
+tuple firstSelector secondSelector =
+    combinedInOut (tupleIn firstSelector secondSelector) (tupleOut firstSelector secondSelector)
 
 
 constant : OutSelector res x -> res -> ModuleName -> ( Int, List Value -> Eval Value )
@@ -889,3 +976,11 @@ twoNumbers fInt fFloat implementation moduleName =
             _ ->
                 EvalResult.fail <| typeError env "Expected two numbers"
     )
+
+
+combinedInOut : InSelector a inner1 -> OutSelector a inner2 -> Selector a
+combinedInOut inSelector outSelector =
+    { name = inSelector.name
+    , fromValue = inSelector.fromValue
+    , toValue = outSelector.toValue
+    }

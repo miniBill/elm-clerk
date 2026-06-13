@@ -75,6 +75,7 @@ type OutputError
 
 type OutputValue
     = OutputValue Value
+    | OutputHtml (Html.Html FrontendMsg)
 
 
 type TypeName

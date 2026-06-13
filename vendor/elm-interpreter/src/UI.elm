@@ -54,13 +54,14 @@ type CallTreeZipper
         }
 
 
-main : Program () Model Msg
-main =
-    Browser.sandbox
-        { init = init
-        , view = \model -> Element.layout [] (innerView model)
-        , update = update
-        }
+
+--main : Program () Model Msg
+--main =
+--    Browser.sandbox
+--        { init = init
+--        , view = \model -> Element.layout [] (innerView model)
+--        , update = update
+--        }
 
 
 init : Model

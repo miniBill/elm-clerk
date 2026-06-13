@@ -5,7 +5,7 @@ all: generated/Core/Basics.elm
 
 KERNEL_PATH = build/src/elm/kernel/0.0.0
 
-generated/Core/Basics.elm: codegen/Gen/Basics.elm codegen/Generate.elm node_modules/elm-codegen/bin/elm-codegen $(patsubst %,build/src/%/elm.json,$(LIBRARIES)) $(KERNEL_PATH)/src/Elm/Kernel/List.elm
+generated/Core/Basics.elm: codegen/Gen/Basics.elm codegen/Generate.elm node_modules/elm-codegen/bin/elm-codegen build/src/miniBill/elm-interpreter/latest/elm.json $(patsubst %,build/src/%/elm.json,$(LIBRARIES)) $(KERNEL_PATH)/src/Elm/Kernel/List.elm
 	yarn elm-codegen run --flags-from build/src
 
 codegen/Gen/Basics.elm: codegen/elm.codegen.json node_modules/elm-codegen/bin/elm-codegen $(wildcard helpers/*.elm)
@@ -14,6 +14,11 @@ codegen/Gen/Basics.elm: codegen/elm.codegen.json node_modules/elm-codegen/bin/el
 node_modules/elm-codegen/bin/elm-codegen: package.json yarn.lock
 	yarn install
 	touch -c $@
+
+build/src/miniBill/elm-interpreter/latest/elm.json:
+	mkdir -p build/src/miniBill/elm-interpreter/latest/src &&\
+	cp -r src build/src/miniBill/elm-interpreter/latest &&\
+	cp elm.json build/src/miniBill/elm-interpreter/latest/
 
 .PRECIOUS: build/%.tar.gz
 build/%.tar.gz:
