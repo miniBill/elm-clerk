@@ -437,14 +437,53 @@ encodedValue =
     let
         fromValue : Value -> Maybe Value
         fromValue value =
-            Nothing
+            case value of
+                Custom [] "String" [ item ] ->
+                    string.fromValue item |> Maybe.map String
 
-        --case value of
-        --    Custom moduleName name values ->
-        --        Just name
-        --
-        --    _ ->
-        --        Nothing
+                Custom [] "Int" [ item ] ->
+                    int.fromValue item |> Maybe.map Int
+
+                Custom [] "Float" [ item ] ->
+                    float.fromValue item |> Maybe.map Float
+
+                Custom [] "Char" [ item ] ->
+                    char.fromValue item |> Maybe.map Char
+
+                Custom [] "Bool" [ item ] ->
+                    bool.fromValue item |> Maybe.map Bool
+
+                Custom [] "Unit" [] ->
+                    Just Unit
+
+                Custom [] "Tuple" [ first, second ] ->
+                    Maybe.map2 Tuple (encodedValue.fromValue first) (encodedValue.fromValue second)
+
+                Custom [] "Triple" [ first, second, third ] ->
+                    Maybe.map3 Triple (encodedValue.fromValue first) (encodedValue.fromValue second) (encodedValue.fromValue third)
+
+                Custom [] "Record" [] ->
+                    Nothing
+
+                Custom [] "Custom" [ moduleName, name, values ] ->
+                    Maybe.map3 Custom
+                        ((list string).fromValue moduleName)
+                        (string.fromValue name)
+                        ((list encodedValue).fromValue values)
+
+                Custom [] "PartiallyApplied" [] ->
+                    Nothing
+
+                Custom [] "JsArray" [] ->
+                    Nothing
+
+                Custom [] "List" [ values ] ->
+                    Maybe.map List <|
+                        (list encodedValue).fromValue values
+
+                _ ->
+                    Nothing
+
         toValue : Value -> Value
         toValue value =
             case value of
@@ -467,10 +506,10 @@ encodedValue =
                     Custom [] "Unit" []
 
                 Tuple first second ->
-                    Custom [] "Tuple" [ toValue first, toValue second ]
+                    Custom [] "Tuple" [ encodedValue.toValue first, encodedValue.toValue second ]
 
                 Triple first second third ->
-                    Custom [] "Triple" [ toValue first, toValue second, toValue third ]
+                    Custom [] "Triple" [ encodedValue.toValue first, encodedValue.toValue second, encodedValue.toValue third ]
 
                 Record dict ->
                     Custom [] "Record" []

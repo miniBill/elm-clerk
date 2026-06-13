@@ -203,16 +203,16 @@ type alias Viewer =
     Value -> Result OutputError (Maybe (Html.Html FrontendMsg))
 
 
-evaluateSections : Model -> ( List ( String, Viewer ), List Section )
+evaluateSections : Model -> ( List Viewer, List Section )
 evaluateSections model =
     let
         maybeEnv : Result Error Env
         maybeEnv =
             makeEnv model.source
 
-        viewerSelector : Kernel.InSelector (List ( String, Value -> InterpreterTypes.Config -> Env -> InterpreterTypes.EvalResult (Maybe Kernel.Html.Html) )) {}
+        viewerSelector : Kernel.InSelector (List (Value -> InterpreterTypes.Config -> Env -> InterpreterTypes.EvalResult (Maybe Kernel.Html.Html))) {}
         viewerSelector =
-            Kernel.listIn (Kernel.tupleIn Kernel.string (Kernel.function Eval.Expression.evalFunction Kernel.anything Kernel.to (Kernel.maybe Kernel.html)))
+            Kernel.listIn (Kernel.function Eval.Expression.evalFunction Kernel.anything Kernel.to (Kernel.maybe Kernel.html))
 
         viewersValue : Result OutputError Value
         viewersValue =
@@ -236,14 +236,15 @@ evaluateSections model =
                             |> Result.mapError OutputError
                             |> Result.map (\maybe -> Maybe.map Kernel.Html.htmlToReal maybe)
 
-        viewers : List ( String, Viewer )
+        viewers : List Viewer
         viewers =
             viewersValue
                 |> Result.toMaybe
                 |> Maybe.andThen viewerSelector.fromValue
                 |> Maybe.withDefault []
-                |> List.map (\pair -> pair |> Tuple.mapSecond transformValue)
+                |> List.map transformValue
 
+        --|> List.map (\pair -> pair |> Tuple.mapSecond transformValue)
         --List Value
         ---> List (Node Pattern)
         ---> Maybe QualifiedNameRef
@@ -259,7 +260,7 @@ evaluateSections model =
             ( viewers, ErrorSection [ OutputError "\"viewers\" failed to evaluate:", error ] :: (model.parsedSections |> List.map evaluateSection) )
 
         Ok _ ->
-            ( viewers, ErrorSection [ OutputError ("All is ok. Viewers: " ++ String.join ", " (List.map Tuple.first viewers)) ] :: (model.parsedSections |> List.map evaluateSection) )
+            ( viewers, model.parsedSections |> List.map evaluateSection )
 
 
 makeEnv : FullCode -> Result Error Env
@@ -612,7 +613,7 @@ viewInteractive interactiveValues functionName ( binding, TypeName typeName ) =
     in
     case Dict.get typeName typeNodeMap of
         Nothing ->
-            Err (OutputError (bindingString ++ " - No way to handle type \"" ++ typeName ++ "\""))
+            Err (OutputError (bindingString ++ " - Interactive input of \"" ++ typeName ++ "\" not supported"))
 
         Just interactiveElement ->
             Ok (interactiveElement.element ( functionName, binding ) maybeValue)
@@ -806,7 +807,7 @@ view model =
     }
 
 
-viewSections : ( List ( String, Viewer ), List Section ) -> List (Element FrontendMsg)
+viewSections : ( List Viewer, List Section ) -> List (Element FrontendMsg)
 viewSections ( viewers, sections ) =
     sections |> List.map (Element.Lazy.lazy (viewSection viewers))
 
@@ -843,7 +844,7 @@ viewCode (Code code) =
             }
 
 
-viewSection : List ( String, Viewer ) -> Section -> Element FrontendMsg
+viewSection : List Viewer -> Section -> Element FrontendMsg
 viewSection viewers section =
     let
         applyViewer : Value -> Result OutputError (Maybe (Html.Html FrontendMsg))
@@ -853,7 +854,7 @@ viewSection viewers section =
                     Kernel.encodedValue.toValue value
             in
             List.Extra.stoppableFoldl
-                (\( viewerType, viewer ) _ ->
+                (\viewer _ ->
                     case viewer encoded of
                         Ok Nothing ->
                             Continue (Ok Nothing)
@@ -862,7 +863,6 @@ viewSection viewers section =
                             Stop (Ok (Just transformed))
 
                         Err error ->
-                            -- TODO show this error
                             Stop (Err error)
                 )
                 (Ok Nothing)
@@ -872,9 +872,8 @@ viewSection viewers section =
         transform valueResult =
             case valueResult of
                 Err _ ->
-                    Err (OutputError "10")
+                    valueResult
 
-                --valueResult
                 Ok (OutputHtml _) ->
                     valueResult
 
@@ -943,6 +942,7 @@ viewMarkdownHtml markdown =
             values
                 |> Html.div []
                 |> Element.html
+                |> Element.el [ width maxWidth ]
 
         Err err ->
             Element.text err
