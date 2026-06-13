@@ -2,7 +2,9 @@ module Frontend exposing (Model, app)
 
 import Browser exposing (UrlRequest(..))
 import Browser.Navigation as Nav
-import Element exposing (Attribute, Element, fill, paddingEach, width)
+import Chart as C
+import Chart.Attributes as CA
+import Element exposing (Attribute, Element, clipX, el, fill, height, maximum, minimum, paddingEach, paragraph, px, scrollbarY, shrink, text, width)
 import Element.Background
 import Element.Font as Font
 import Element.Input
@@ -20,6 +22,7 @@ import Eval.Expression
 import Eval.Module
 import FastDict as Dict exposing (Dict)
 import Html
+import Html.Attributes
 import Http
 import Interactives exposing (interactivesEmpty, interactivesGet, interactivesInsert)
 import InterpreterTypes exposing (Env, Error(..), Value(..))
@@ -138,10 +141,6 @@ update msg model =
             ( { model | evalInteractives = model.inputInteractives }, Cmd.none )
 
 
-
---( model, Cmd.none )
-
-
 updateFromBackend : ToFrontend -> Model -> ( Model, Cmd FrontendMsg )
 updateFromBackend msg model =
     case msg of
@@ -149,7 +148,7 @@ updateFromBackend msg model =
             ( model, Cmd.none )
 
         Startup interactives ->
-            ( { model | evalInteractives = interactives }, Cmd.none )
+            ( { model | inputInteractives = interactives, evalInteractives = interactives }, Cmd.none )
 
 
 notifyIn : FrontendMsg -> Float -> Cmd FrontendMsg
@@ -636,7 +635,7 @@ interactiveElementInt =
     in
     { key = TypeName "Int"
     , conversion = conversion
-    , element = textElement "Int"
+    , element = viewTextInput "Int"
     }
 
 
@@ -657,7 +656,7 @@ interactiveElementChar =
     in
     { key = TypeName "Char"
     , conversion = conversion
-    , element = textElement "Char"
+    , element = viewTextInput "Char"
     }
 
 
@@ -672,25 +671,8 @@ interactiveElementString =
     in
     { key = TypeName "String"
     , conversion = conversion
-    , element = textElement "String"
+    , element = viewTextInput "String"
     }
-
-
-textElement typeName ( functionName, ParameterName parameterName ) maybeRawValue =
-    let
-        maybeValue : Maybe String
-        maybeValue =
-            maybeRawValue |> Maybe.map (\(RawInteractiveValue x) -> x)
-    in
-    Element.row [ Element.padding 6 ]
-        [ Element.Input.text
-            []
-            { onChange = \x -> InteractiveUpdated ( functionName, ParameterName parameterName ) (RawInteractiveValue x)
-            , text = Maybe.withDefault "" maybeValue
-            , placeholder = Nothing
-            , label = Element.Input.labelAbove [ monospace ] (Element.text (parameterName ++ " : " ++ typeName ++ " = " ++ Maybe.withDefault "" maybeValue))
-            }
-        ]
 
 
 
@@ -778,16 +760,6 @@ view : Model -> Browser.Document FrontendMsg
 view model =
     { title = ""
     , body =
-        --[ Html.div [ Attr.style "text-align" "left", Attr.style "padding-top" "40px", Attr.style "padding-left" "185px", Attr.style "padding-right" "40px" ]
-        --([ Html.div [ Attr.style "text-align" "center" ]
-        --    [ Html.img [ Attr.src "https://lamdera.app/lamdera-logo-black.png", Attr.width 150 ] []
-        --    , Html.div
-        --        [ Attr.style "font-family" "sans-serif"
-        --        , Attr.style "padding-top" "40px"
-        --        ]
-        --        [ Html.text model.message ]
-        --    ]
-        -- ]
         [ Element.layout []
             (Element.column
                 -- left could be 185
@@ -808,13 +780,33 @@ view model =
                     :: (evaluateSections model
                             |> List.map (Element.Lazy.lazy viewSection)
                        )
+                    ++ [ viewChart ]
                 )
             )
         ]
-
-    --)
-    --]
     }
+
+
+viewChart : Element msg
+viewChart =
+    Element.el [ width maxWidth, Element.paddingEach { top = 40, left = 40, right = 40, bottom = 0 } ] <|
+        Element.html <|
+            C.chart
+                [ CA.height 200
+                , CA.width 300
+                , CA.padding { top = 10, bottom = 5, left = 10, right = 10 }
+                ]
+                [ C.xLabels []
+                , C.yLabels [ CA.withGrid ]
+                , C.series .x
+                    [ C.interpolated .y [ CA.monotone ] [ CA.circle ]
+                    , C.interpolated .z [ CA.monotone ] [ CA.square ]
+                    ]
+                    [ { x = 1, y = 2, z = 3 }
+                    , { x = 5, y = 4, z = 1 }
+                    , { x = 10, y = 2, z = 4 }
+                    ]
+                ]
 
 
 viewSection : Section -> Element FrontendMsg
@@ -856,6 +848,7 @@ viewSection section =
                 , Element.row
                     [ width fill
                     , Element.Background.color (Element.rgb255 240 240 240)
+                    , Element.paddingXY (graySidePadding - 9) 0
                     ]
                     elements
                 , case output of
@@ -913,30 +906,64 @@ viewMarkdown markdown =
             Element.text err
 
 
-viewOutputError : OutputError -> Element FrontendMsg
-viewOutputError (OutputError output) =
-    Element.column
-        [ monospace
-        , Font.size 20
-        , Element.paddingXY 10 10
-        , Element.Background.color (Element.rgb255 240 240 240)
-        , width fill
-        ]
-        [ Element.text output ]
-        |> Element.el [ Element.paddingXY 0 3, width fill ]
-
-
 viewOutputValue : OutputValue -> Element FrontendMsg
 viewOutputValue (OutputValue output) =
-    Element.column
-        [ monospace
-        , Font.size 20
-        , Element.paddingXY 10 10
-        , Element.Background.color (Element.rgb255 240 240 240)
-        , width fill
+    viewOutput ("-> " ++ output)
+
+
+viewOutputError : OutputError -> Element FrontendMsg
+viewOutputError (OutputError output) =
+    viewOutput output
+
+
+viewOutput : String -> Element msg
+viewOutput output =
+    Element.el [ Element.paddingXY 0 3, width fill ] <|
+        Element.el
+            [ width <| maxWidth
+            , height <| fill
+            , Element.Background.color (Element.rgb255 240 240 240)
+            , Element.paddingXY graySidePadding 8
+            ]
+        <|
+            el
+                [ width shrink
+                , height <| maximum 300 shrink
+                , scrollbarY
+                , clipX
+                , Element.htmlAttribute (Html.Attributes.style "word-break" "break-word")
+                ]
+                (paragraph [ monospace, Font.size 20 ] [ text output ])
+
+
+viewTextInput : String -> ( FunctionName, ParameterName ) -> Maybe RawInteractiveValue -> Element FrontendMsg
+viewTextInput typeName ( functionName, ParameterName parameterName ) maybeRawValue =
+    let
+        maybeValue : Maybe String
+        maybeValue =
+            maybeRawValue |> Maybe.map (\(RawInteractiveValue x) -> x)
+    in
+    Element.row [ Element.padding 6 ]
+        [ Element.Input.text
+            []
+            { onChange = \x -> InteractiveUpdated ( functionName, ParameterName parameterName ) (RawInteractiveValue x)
+            , text = Maybe.withDefault "" maybeValue
+            , placeholder = Nothing
+            , label =
+                Element.Input.labelAbove [ monospace, Font.size 16, Element.paddingXY 6 0 ]
+                    (Element.text (parameterName ++ " : " ++ typeName ++ " = " ++ Maybe.withDefault "" maybeValue))
+            }
         ]
-        [ Element.text ("-> " ++ output) ]
-        |> Element.el [ Element.paddingXY 0 3, width fill ]
+
+
+maxWidth : Element.Length
+maxWidth =
+    maximum 1000 fill
+
+
+graySidePadding : Int
+graySidePadding =
+    14
 
 
 monospace : Attribute msg
