@@ -23,6 +23,7 @@ init : ( Model, Cmd BackendMsg )
 init =
     ( { message = "Hello!"
       , interactives = interactivesEmpty
+      , scroll = 0
       }
     , Cmd.none
     )
@@ -45,4 +46,14 @@ updateFromFrontend _ clientId msg model =
             ( { model | interactives = interactives }, Cmd.none )
 
         RequestStartup ->
-            ( model, sendToFrontend clientId (Startup model.interactives) )
+            ( model
+            , sendToFrontend clientId
+                (Startup
+                    { interactives = model.interactives
+                    , scroll = model.scroll
+                    }
+                )
+            )
+
+        NewScrollToBackend y ->
+            ( { model | scroll = y }, Cmd.none )

@@ -1,6 +1,7 @@
 module Frontend exposing (Model, app)
 
 import Browser exposing (UrlRequest(..))
+import Browser.Dom
 import Browser.Navigation as Nav
 import Chart as C
 import Chart.Attributes as CA
@@ -80,6 +81,7 @@ init _ key =
             , expect = Http.expectString GotText
             }
         , sendToBackend RequestStartup
+        , notifyIn Poll 4000
         ]
     )
 
@@ -108,7 +110,10 @@ update msg model =
         GotText result ->
             case result of
                 Ok source ->
-                    ( { model | source = FullCode source, parsedSections = parseSections (FullCode source) }
+                    ( { model
+                        | source = FullCode source
+                        , parsedSections = parseSections (FullCode source)
+                      }
                     , Cmd.none
                       --[ sendToBackend (OutputToBackend "placeholder")
                       --[ Http.post
@@ -140,6 +145,20 @@ update msg model =
         ReloadCode ->
             ( { model | evalInteractives = model.inputInteractives }, Cmd.none )
 
+        Poll ->
+            let
+                checkViewport : Cmd FrontendMsg
+                checkViewport =
+                    Task.perform (\viewport -> NewScroll viewport.viewport.y) Browser.Dom.getViewport
+            in
+            ( model, Cmd.batch [ checkViewport, notifyIn Poll 4000 ] )
+
+        NewScroll y ->
+            ( model, sendToBackend (NewScrollToBackend y) )
+
+        NoOp ->
+            ( model, Cmd.none )
+
 
 updateFromBackend : ToFrontend -> Model -> ( Model, Cmd FrontendMsg )
 updateFromBackend msg model =
@@ -147,8 +166,13 @@ updateFromBackend msg model =
         NoOpToFrontend ->
             ( model, Cmd.none )
 
-        Startup interactives ->
-            ( { model | inputInteractives = interactives, evalInteractives = interactives }, Cmd.none )
+        Startup { interactives, scroll } ->
+            ( { model
+                | inputInteractives = interactives
+                , evalInteractives = interactives
+              }
+            , Task.perform (\_ -> NoOp) (Browser.Dom.setViewport 0 scroll)
+            )
 
 
 notifyIn : FrontendMsg -> Float -> Cmd FrontendMsg
@@ -254,12 +278,28 @@ evaluateSections model =
         evaluateSection sectionResult =
             sectionResult
                 |> sectionFromParsed model.evalInteractives model.inputInteractives maybeEnv
+
+        viewersError : Maybe OutputError
+        viewersError =
+            case viewersValue of
+                Ok _ ->
+                    Nothing
+
+                Err (OutputError error) ->
+                    -- This exact error means that the user has not supplied a "viewers" at all
+                    -- That's okay, they don't need to! We just want to let them know why their
+                    -- viewers are funky if they do expect them to show up
+                    if String.startsWith "NameError: " error && String.endsWith "viewers" error then
+                        Nothing
+
+                    else
+                        Just (OutputError (Debug.log "error" error))
     in
-    case viewersValue of
-        Err error ->
+    case viewersError of
+        Just error ->
             ( viewers, ErrorSection [ OutputError "\"viewers\" failed to evaluate:", error ] :: (model.parsedSections |> List.map evaluateSection) )
 
-        Ok _ ->
+        Nothing ->
             ( viewers, model.parsedSections |> List.map evaluateSection )
 
 
@@ -789,15 +829,24 @@ view model =
                 [ Element.alignLeft, Element.paddingEach { top = 40, left = 40, right = 40, bottom = 0 } ]
                 (Element.el
                     [ Element.centerX
+
+                    --, Font.typeface "IBM Plex Sans"
                     , Font.family
-                        [ Font.external
-                            { name = "IBM Plex Sans"
-                            , url = "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&display=swap"
-                            }
+                        [ Font.typeface "Quicksand"
                         , Font.sansSerif
                         ]
+
+                    --, Font.typeface [ "IBM Plex Sans", "sans-serif" ]
+                    --, Font.family
+                    --    [ Font.external
+                    --        { name = "IBM Plex Sans"
+                    --        , url = "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&display=swap"
+                    --        }
+                    --    , Font.sansSerif
+                    --    ]
                     , Font.size 72
                     , Font.color (Element.rgb255 120 120 120)
+                    , Element.paddingEach { defaultPadding | bottom = 20 }
                     ]
                     (Element.text "elm-clerk")
                     :: (evaluateSections model |> viewSections)
@@ -805,6 +854,11 @@ view model =
             )
         ]
     }
+
+
+defaultPadding : { top : Int, right : Int, bottom : Int, left : Int }
+defaultPadding =
+    { top = 0, right = 0, bottom = 0, left = 0 }
 
 
 viewSections : ( List Viewer, List Section ) -> List (Element FrontendMsg)
@@ -837,7 +891,7 @@ viewChart =
 viewCode : Code -> Element msg
 viewCode (Code code) =
     Element.el [ width maxWidth ] <|
-        Source.viewExpression [ scrollbarX ]
+        Source.viewExpression [ scrollbarX, monospace ]
             { highlight = Nothing
             , buttons = []
             , source = code
@@ -942,7 +996,13 @@ viewMarkdownHtml markdown =
             values
                 |> Html.div []
                 |> Element.html
-                |> Element.el [ width maxWidth ]
+                |> Element.el
+                    [ width maxWidth
+                    , Font.family
+                        [ Font.typeface "Fira Sans"
+                        , Font.sansSerif
+                        ]
+                    ]
 
         Err err ->
             Element.text err

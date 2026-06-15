@@ -25,6 +25,7 @@ type alias FrontendModel =
 type alias BackendModel =
     { message : String
     , interactives : Interactives
+    , scroll : Float
     }
 
 
@@ -94,11 +95,15 @@ type FrontendMsg
     | WroteText (Result Http.Error ())
     | InteractiveUpdated ( FunctionName, ParameterName ) RawInteractiveValue
     | ReloadCode
+    | Poll
+    | NewScroll Float
+    | NoOp
 
 
 type ToBackend
     = NoOpToBackend
     | InteractivesToBackend Interactives
+    | NewScrollToBackend Float
     | RequestStartup
 
 
@@ -108,7 +113,7 @@ type BackendMsg
 
 type ToFrontend
     = NoOpToFrontend
-    | Startup Interactives
+    | Startup { interactives : Interactives, scroll : Float }
 
 
 type Section

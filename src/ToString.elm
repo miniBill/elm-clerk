@@ -33,14 +33,18 @@ qualifiedNameRefToString name =
 
 evalErrorDataToString : EvalErrorData -> String
 evalErrorDataToString errorData =
-    (errorData.callStack
-        |> List.map
-            (\nameRef -> String.join "." (nameRef.moduleName ++ [ nameRef.name ]))
-    )
-        ++ [ "" ]
-        ++ [ evalErrorKindToString errorData.error ]
-        |> (\list -> "Call stack:" :: list)
-        |> String.join "\n"
+    if List.isEmpty errorData.callStack then
+        evalErrorKindToString errorData.error
+
+    else
+        (errorData.callStack
+            |> List.map
+                (\nameRef -> String.join "." (nameRef.moduleName ++ [ nameRef.name ]))
+        )
+            ++ [ "" ]
+            ++ [ evalErrorKindToString errorData.error ]
+            |> (\list -> "Call stack:" :: list)
+            |> String.join "\n"
 
 
 errorToString : Error -> String
