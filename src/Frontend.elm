@@ -10,6 +10,8 @@ import Element.Background
 import Element.Font as Font
 import Element.Input
 import Element.Lazy
+import Elm
+import Elm.CodeGen
 import Elm.Parser
 import Elm.Parser.Comments
 import Elm.Parser.Declarations
@@ -19,9 +21,11 @@ import Elm.Syntax.File exposing (File)
 import Elm.Syntax.Node as Node exposing (Node(..))
 import Elm.Syntax.Pattern exposing (Pattern(..))
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
+import Elm.ToString
 import Eval.Expression
 import Eval.Module
 import FastDict as Dict exposing (Dict)
+import Hash
 import Html
 import Html.Attributes exposing (style)
 import Http
@@ -71,6 +75,7 @@ init : Url.Url -> Nav.Key -> ( Model, Cmd FrontendMsg )
 init _ key =
     ( { key = key
       , source = FullCode ""
+      , checksum = ""
       , parsedSections = []
       , evalInteractives = interactivesEmpty
       , inputInteractives = interactivesEmpty
@@ -110,19 +115,26 @@ update msg model =
         GotText result ->
             case result of
                 Ok source ->
-                    ( { model
-                        | source = FullCode source
-                        , parsedSections = parseSections (FullCode source)
-                      }
-                    , Cmd.none
-                      --[ sendToBackend (OutputToBackend "placeholder")
-                      --[ Http.post
-                      --    { url = "/_x/write/pages/Page1.elm.txt"
-                      --    , body = stringBody "application/text" (plaintextFromSections sectionResults)
-                      --    , expect = Http.expectWhatever WroteText
-                      --    }
-                      --]
-                    )
+                    let
+                        checksum =
+                            source |> Hash.fromString |> Hash.toString
+                    in
+                    if checksum == model.checksum then
+                        ( model, Cmd.none )
+
+                    else
+                        ( { model
+                            | source = FullCode source
+                            , parsedSections = parseSections (FullCode source)
+                            , checksum = checksum
+                          }
+                        , sendToBackend (NewChecksumToBackend checksum)
+                          --Http.post
+                          --  { url = "/_x/write/pages/Page1.elm.txt"
+                          --  , body = Http.stringBody "application/text" (getHostText (FullCode source))
+                          --  , expect = Http.expectWhatever WroteText
+                          --  }
+                        )
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -219,6 +231,42 @@ parseSection (Code source) =
     ParserFast.run parser source
 
 
+getHostText : FullCode -> String
+getHostText fullSource =
+    let
+        maybeFile : Result Error File
+        maybeFile =
+            makeFile fullSource
+
+        maybeDeclarations : Maybe (List String)
+        maybeDeclarations =
+            Result.toMaybe maybeFile
+                |> Maybe.map
+                    (\file ->
+                        file
+                            |> .declarations
+                            |> List.map Node.value
+                            |> List.map extractNameFromDeclaration
+                    )
+
+        maybeDeclarationList : List String
+        maybeDeclarationList =
+            maybeDeclarations
+                |> Maybe.withDefault []
+                |> List.map (\name -> Elm.tuple (Elm.val name) (Elm.string name))
+                |> Elm.list
+                |> Elm.declaration "functionList"
+                |> Elm.ToString.declaration
+                |> List.map .body
+
+        (FullCode fullSourceText) =
+            fullSource
+    in
+    fullSourceText
+        ++ "\n\n"
+        ++ String.join "\n" maybeDeclarationList
+
+
 
 -- SECTIONS EVALUATION
 
@@ -230,9 +278,14 @@ type alias Viewer =
 evaluateSections : Model -> ( List Viewer, List Section )
 evaluateSections model =
     let
+        maybeFile : Result Error File
+        maybeFile =
+            makeFile model.source
+
         maybeEnv : Result Error Env
         maybeEnv =
-            makeEnv model.source
+            maybeFile
+                |> Result.andThen Eval.Module.buildInitialEnv
 
         viewerSelector : Kernel.InSelector (List (Value -> InterpreterTypes.Config -> Env -> InterpreterTypes.EvalResult (Maybe Kernel.Html.Html))) {}
         viewerSelector =
@@ -294,27 +347,92 @@ evaluateSections model =
 
                     else
                         Just (OutputError (Debug.log "error" error))
+
+        --maybeDeclarations : Maybe (List String)
+        --maybeDeclarations =
+        --    Result.toMaybe maybeFile
+        --        |> Maybe.map
+        --            (\file ->
+        --                file
+        --                    |> .declarations
+        --                    |> List.map Node.value
+        --                    |> List.map extractNameFromDeclaration
+        --            )
+        evaluatedSections : List Section
+        evaluatedSections =
+            model.parsedSections |> List.map evaluateSection
+
+        --maybeDeclarationList : List String
+        --maybeDeclarationList =
+        --    maybeDeclarations
+        --        |> Maybe.withDefault []
+        --        |> List.map (\name -> Elm.tuple (Elm.val name) (Elm.string name))
+        --        |> Elm.list
+        --        |> Elm.declaration "functionList"
+        --        |> Elm.ToString.declaration
+        --        |> List.map .body
+        --
+        --evaluatedSections : List Section
+        --evaluatedSections =
+        --    case maybeDeclarationList of
+        --        [] ->
+        --            model.parsedSections |> List.map evaluateSection
+        --
+        --        declarations ->
+        --            (declarations
+        --                |> List.map OutputError
+        --                |> ErrorSection
+        --            )
+        --                :: (model.parsedSections
+        --                        |> List.map evaluateSection
+        --                   )
+        --maybeDeclarations : Maybe (List String)
+        --maybeDeclarations =
+        --    Result.toMaybe maybeFile
+        --        |> Maybe.map
+        --            (\file ->
+        --                file
+        --                    |> .declarations
+        --                    |> List.map Node.value
+        --                    |> List.map extractNameFromDeclaration
+        --            )
+        --evaluatedSections : List Section
+        --evaluatedSections =
+        --    case maybeDeclarations of
+        --        Just declarations ->
+        --            (declarations
+        --                |> List.map (\name -> ", \"" ++ name ++ "\" = " ++ name)
+        --                |> List.map OutputError
+        --                |> ErrorSection
+        --            )
+        --                :: (model.parsedSections
+        --                        |> List.map evaluateSection
+        --                   )
+        --
+        --        Nothing ->
+        --            model.parsedSections |> List.map evaluateSection
     in
     case viewersError of
         Just error ->
-            ( viewers, ErrorSection [ OutputError "\"viewers\" failed to evaluate:", error ] :: (model.parsedSections |> List.map evaluateSection) )
+            ( viewers, ErrorSection [ OutputError "\"viewers\" failed to evaluate:", error ] :: evaluatedSections )
 
         Nothing ->
-            ( viewers, model.parsedSections |> List.map evaluateSection )
+            ( viewers, evaluatedSections )
 
 
-makeEnv : FullCode -> Result Error Env
-makeEnv (FullCode source) =
+makeFile : FullCode -> Result Error File
+makeFile (FullCode source) =
     let
         file : Result (List DeadEnd) File
         file =
             Elm.Parser.parseToFile source
-
-        fileMappedError : Result Error File
-        fileMappedError =
-            Result.mapError ParsingError file
     in
-    Result.andThen Eval.Module.buildInitialEnv fileMappedError
+    Result.mapError ParsingError file
+
+
+makeEnv : File -> Result Error Env
+makeEnv file =
+    Eval.Module.buildInitialEnv file
 
 
 sectionFromParsed : Interactives -> Interactives -> Result Error Env -> ( Code, Result error (List Cell) ) -> Section

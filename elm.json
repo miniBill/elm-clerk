@@ -11,6 +11,7 @@
     "elm-version": "0.19.1",
     "dependencies": {
         "direct": {
+            "Evelios/elm-hash": "1.0.0",
             "dillonkearns/elm-markdown": "7.0.1",
             "elm/browser": "1.0.2",
             "elm/bytes": "1.0.8",
@@ -26,6 +27,7 @@
             "jmpavlick/elm-ui-markdown": "1.0.0",
             "lamdera/codecs": "1.0.0",
             "lamdera/core": "1.0.0",
+            "mdgriffith/elm-codegen": "6.0.3",
             "mdgriffith/elm-ui": "1.1.8",
             "micahhahn/elm-safe-recursion": "2.0.0",
             "miniBill/elm-fast-dict": "1.2.6",
@@ -39,6 +41,8 @@
         "indirect": {
             "Chadtech/elm-bool-extra": "2.4.2",
             "K-Adam/elm-dom": "1.0.0",
+            "bonzaico/murmur3": "1.0.0",
+            "chain-partners/elm-bignum": "1.0.1",
             "danhandrea/elm-time-extra": "1.1.0",
             "elm/file": "1.0.5",
             "elm/svg": "1.0.1",

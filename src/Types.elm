@@ -16,6 +16,7 @@ import Url exposing (Url)
 type alias FrontendModel =
     { key : Key
     , source : FullCode
+    , checksum : String
     , parsedSections : List ( Code, ParsedSection )
     , inputInteractives : Interactives
     , evalInteractives : Interactives
@@ -105,6 +106,7 @@ type ToBackend
     | InteractivesToBackend Interactives
     | NewScrollToBackend Float
     | RequestStartup
+    | NewChecksumToBackend String
 
 
 type BackendMsg
@@ -113,7 +115,7 @@ type BackendMsg
 
 type ToFrontend
     = NoOpToFrontend
-    | Startup { interactives : Interactives, scroll : Float }
+    | Startup { interactives : Interactives, scroll : Float, hash : String }
 
 
 type Section
