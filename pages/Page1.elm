@@ -12,6 +12,11 @@ import Types exposing (FrontendMsg)
 import Value
 
 
+p : Int
+p =
+    5
+
+
 repeat : Char -> Char -> Int -> String -> String
 repeat start end repetitions text =
     String.fromChar start ++ String.repeat repetitions text ++ String.fromChar end

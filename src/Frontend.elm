@@ -5,6 +5,7 @@ import Browser.Dom
 import Browser.Navigation as Nav
 import Chart as C
 import Chart.Attributes as CA
+import Common exposing (notifyIn)
 import Element exposing (Attribute, Element, clipX, el, fill, height, maximum, minimum, paddingEach, paragraph, px, scrollbarX, scrollbarY, shrink, text, width)
 import Element.Background
 import Element.Font as Font
@@ -28,7 +29,7 @@ import FastDict as Dict exposing (Dict)
 import Hash
 import Html
 import Html.Attributes exposing (style)
-import Http
+import Http exposing (Error(..))
 import Interactives exposing (interactivesEmpty, interactivesGet, interactivesInsert)
 import InterpreterTypes exposing (Env, Error(..), Eval, Value(..))
 import Kernel
@@ -74,11 +75,12 @@ app =
 init : Url.Url -> Nav.Key -> ( Model, Cmd FrontendMsg )
 init _ key =
     ( { key = key
-      , source = FullCode ""
-      , checksum = ""
+      , source = Nothing
+      , checksum = Nothing
       , parsedSections = []
       , evalInteractives = interactivesEmpty
       , inputInteractives = interactivesEmpty
+      , error = ""
       }
     , Cmd.batch
         [ Http.get
@@ -89,6 +91,29 @@ init _ key =
         , notifyIn Poll 4000
         ]
     )
+
+
+updateFullSource : FrontendModel -> ( FrontendModel, Cmd FrontendMsg )
+updateFullSource model =
+    case ( model.source, model.checksum ) of
+        ( Just (FullCode source), Just modelChecksum ) ->
+            let
+                checksum =
+                    source |> Hash.fromString |> Hash.toString
+            in
+            if checksum == modelChecksum then
+                ( { model | error = checksum ++ ", " ++ modelChecksum }, Cmd.none )
+
+            else
+                ( { model | error = checksum ++ ", " ++ modelChecksum, checksum = Just checksum }
+                  --( { model | checksum = Just checksum }
+                , Cmd.batch
+                    [ sendToBackend (NewChecksumToBackend checksum)
+                    ]
+                )
+
+        _ ->
+            ( model, Cmd.none )
 
 
 update : FrontendMsg -> Model -> ( Model, Cmd FrontendMsg )
@@ -115,29 +140,37 @@ update msg model =
         GotText result ->
             case result of
                 Ok source ->
-                    let
-                        checksum =
-                            source |> Hash.fromString |> Hash.toString
-                    in
-                    if checksum == model.checksum then
-                        ( model, Cmd.none )
-
-                    else
-                        ( { model
-                            | source = FullCode source
+                    updateFullSource
+                        { model
+                            | source = FullCode source |> Just
                             , parsedSections = parseSections (FullCode source)
-                            , checksum = checksum
-                          }
-                        , sendToBackend (NewChecksumToBackend checksum)
-                          --Http.post
-                          --  { url = "/_x/write/pages/Page1.elm.txt"
-                          --  , body = Http.stringBody "application/text" (getHostText (FullCode source))
-                          --  , expect = Http.expectWhatever WroteText
-                          --  }
-                        )
+                        }
 
-                Err _ ->
-                    ( model, Cmd.none )
+                Err error ->
+                    ( { model
+                        | error =
+                            case error of
+                                BadUrl string ->
+                                    "Couldn't fetch source from backend, Badurl, " ++ string
+
+                                Timeout ->
+                                    "Couldn't fetch source from backend, Timeout"
+
+                                NetworkError ->
+                                    "Couldn't fetch source from backend, NetworkError"
+
+                                BadStatus status ->
+                                    if status == 503 then
+                                        "Couldn't fetch source from backend, 503.\nAre you running lamdera with experimental features enabled?\nexperimental=1 lamdera live"
+
+                                    else
+                                        "Couldn't fetch source from backend, " ++ String.fromInt status
+
+                                BadBody string ->
+                                    "Couldn't fetch source from backend, BadBody, " ++ string
+                      }
+                    , Cmd.none
+                    )
 
         WroteText _ ->
             ( model, Cmd.none )
@@ -178,19 +211,36 @@ updateFromBackend msg model =
         NoOpToFrontend ->
             ( model, Cmd.none )
 
-        Startup { interactives, scroll } ->
-            ( { model
-                | inputInteractives = interactives
-                , evalInteractives = interactives
-              }
-            , Task.perform (\_ -> NoOp) (Browser.Dom.setViewport 0 scroll)
+        Startup { interactives, scroll, checksum } ->
+            let
+                ( newModel, cmd ) =
+                    updateFullSource
+                        { model
+                            | inputInteractives = interactives
+                            , evalInteractives = interactives
+                            , checksum = Just checksum
+                        }
+            in
+            ( newModel
+            , Cmd.batch
+                [ Task.perform (\_ -> NoOp) (Browser.Dom.setViewport 0 scroll)
+                , cmd
+                ]
             )
 
+        RequestNewSourceToFrontend ->
+            case model.source of
+                Just source ->
+                    ( model
+                    , Http.post
+                        { url = "/_x/write/pages/Page1.elm.txt"
+                        , body = Http.stringBody "application/text" (getHostText source)
+                        , expect = Http.expectWhatever WroteText
+                        }
+                    )
 
-notifyIn : FrontendMsg -> Float -> Cmd FrontendMsg
-notifyIn msg time =
-    Process.sleep time
-        |> Task.attempt (\_ -> msg)
+                Nothing ->
+                    ( { model | error = "Requested new source when there was no source yet" }, Cmd.none )
 
 
 
@@ -275,12 +325,12 @@ type alias Viewer =
     Value -> Result OutputError (Maybe (Html.Html FrontendMsg))
 
 
-evaluateSections : Model -> ( List Viewer, List Section )
-evaluateSections model =
+evaluateSections : Model -> FullCode -> ( List Viewer, List Section )
+evaluateSections model source =
     let
         maybeFile : Result Error File
         maybeFile =
-            makeFile model.source
+            makeFile source
 
         maybeEnv : Result Error Env
         maybeEnv =
@@ -967,11 +1017,39 @@ view model =
                     , Element.paddingEach { defaultPadding | bottom = 20 }
                     ]
                     (Element.text "elm-clerk")
-                    :: (evaluateSections model |> viewSections)
+                    :: viewError model.error
+                    ++ (case model.source of
+                            Just source ->
+                                evaluateSections model source |> viewSections
+
+                            _ ->
+                                if model.error == "" then
+                                    [ Element.el
+                                        [ Font.family
+                                            [ Font.typeface "Quicksand"
+                                            , Font.sansSerif
+                                            ]
+                                        ]
+                                        (Element.text "Loading...")
+                                    ]
+
+                                else
+                                    []
+                       )
                 )
             )
         ]
     }
+
+
+viewError : String -> List (Element FrontendMsg)
+viewError error =
+    case error of
+        "" ->
+            []
+
+        _ ->
+            String.split "\n" error |> List.map OutputError |> List.map viewOutputError
 
 
 defaultPadding : { top : Int, right : Int, bottom : Int, left : Int }

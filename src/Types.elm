@@ -9,17 +9,19 @@ import FastDict as Dict exposing (Dict)
 import Html exposing (Html)
 import Http
 import InterpreterTypes exposing (Value)
+import Lamdera exposing (ClientId)
 import Parser exposing (DeadEnd)
 import Url exposing (Url)
 
 
 type alias FrontendModel =
     { key : Key
-    , source : FullCode
-    , checksum : String
+    , source : Maybe FullCode
+    , checksum : Maybe String
     , parsedSections : List ( Code, ParsedSection )
     , inputInteractives : Interactives
     , evalInteractives : Interactives
+    , error : String
     }
 
 
@@ -27,6 +29,7 @@ type alias BackendModel =
     { message : String
     , interactives : Interactives
     , scroll : Float
+    , checksum : String
     }
 
 
@@ -111,11 +114,13 @@ type ToBackend
 
 type BackendMsg
     = NoOpBackendMsg
+    | RequestNewSource ClientId
 
 
 type ToFrontend
     = NoOpToFrontend
-    | Startup { interactives : Interactives, scroll : Float, hash : String }
+    | Startup { interactives : Interactives, scroll : Float, checksum : String }
+    | RequestNewSourceToFrontend
 
 
 type Section
