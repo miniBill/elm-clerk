@@ -51,6 +51,7 @@ import Types exposing (BackendMsg(..), Cell(..), Code(..), FileName(..), Fronten
 import UI.Source as Source
 import Url
 import Value
+import Viewers
 
 
 
@@ -163,6 +164,7 @@ update msg model =
                         | fileList =
                             list
                                 |> List.filter (String.endsWith ".elm")
+                                |> List.filter (\x -> not (String.endsWith "Host.elm" x))
                                 |> List.map FileName
                       }
                     , Cmd.none
@@ -246,11 +248,12 @@ updateFromBackend msg model =
             case model.source of
                 Just source ->
                     ( model
-                    , Http.post
-                        { url = "/_x/write/pages/Page1.elm.txt"
-                        , body = Http.stringBody "application/text" (getHostText source)
-                        , expect = Http.expectWhatever WroteText
-                        }
+                    , Cmd.none
+                      --, Http.post
+                      --    { url = "/_x/write/src/Host.elm"
+                      --    , body = Http.stringBody "application/text" (getHostText source)
+                      --    , expect = Http.expectWhatever WroteText
+                      --    }
                     )
 
                 Nothing ->
@@ -330,7 +333,7 @@ getHostText fullSource =
         maybeDeclarationList =
             maybeDeclarations
                 |> Maybe.withDefault []
-                |> List.map (\name -> Elm.tuple (Elm.val name) (Elm.string name))
+                |> List.map (\name -> Elm.tuple (Elm.string name) (Elm.val name))
                 |> Elm.list
                 |> Elm.declaration "functionList"
                 |> Elm.ToString.declaration
@@ -352,7 +355,35 @@ type alias Viewer =
     Value -> Result OutputError (Maybe (Html.Html FrontendMsg))
 
 
-evaluateSections : Model -> FullCode -> ( List Viewer, List Section )
+type alias HostViewer =
+    Value -> Maybe (Html.Html FrontendMsg)
+
+
+getModuleName : Maybe FullCode -> List (Element FrontendMsg)
+getModuleName maybeSource =
+    case maybeSource of
+        Just source ->
+            let
+                maybeFile : Result Error File
+                maybeFile =
+                    makeFile source
+
+                maybeEnv : Result Error Env
+                maybeEnv =
+                    maybeFile
+                        |> Result.andThen Eval.Module.buildInitialEnv
+
+                moduleName : String
+                moduleName =
+                    String.join "" (Result.withDefault [] (Result.map .currentModule maybeEnv))
+            in
+            [ viewOutputError (OutputError moduleName) ]
+
+        Nothing ->
+            []
+
+
+evaluateSections : Model -> FullCode -> ( List Viewer, List HostViewer, List Section )
 evaluateSections model source =
     let
         maybeFile : Result Error File
@@ -398,12 +429,16 @@ evaluateSections model source =
                 |> Maybe.withDefault []
                 |> List.map transformValue
 
-        --|> List.map (\pair -> pair |> Tuple.mapSecond transformValue)
-        --List Value
-        ---> List (Node Pattern)
-        ---> Maybe QualifiedNameRef
-        ---> Node Expression
-        ---> Eval Value
+        moduleName : String
+        moduleName =
+            String.join "" (Result.withDefault [] (Result.map .currentModule maybeEnv))
+
+        hostViewers : List HostViewer
+        hostViewers =
+            Dict.fromList Viewers.viewers
+                |> Dict.get moduleName
+                |> Maybe.withDefault []
+
         evaluateSection : ( Code, Result error (List Cell) ) -> Section
         evaluateSection sectionResult =
             sectionResult
@@ -425,76 +460,16 @@ evaluateSections model source =
                     else
                         Just (OutputError (Debug.log "error" error))
 
-        --maybeDeclarations : Maybe (List String)
-        --maybeDeclarations =
-        --    Result.toMaybe maybeFile
-        --        |> Maybe.map
-        --            (\file ->
-        --                file
-        --                    |> .declarations
-        --                    |> List.map Node.value
-        --                    |> List.map extractNameFromDeclaration
-        --            )
         evaluatedSections : List Section
         evaluatedSections =
             model.parsedSections |> List.map evaluateSection
-
-        --maybeDeclarationList : List String
-        --maybeDeclarationList =
-        --    maybeDeclarations
-        --        |> Maybe.withDefault []
-        --        |> List.map (\name -> Elm.tuple (Elm.val name) (Elm.string name))
-        --        |> Elm.list
-        --        |> Elm.declaration "functionList"
-        --        |> Elm.ToString.declaration
-        --        |> List.map .body
-        --
-        --evaluatedSections : List Section
-        --evaluatedSections =
-        --    case maybeDeclarationList of
-        --        [] ->
-        --            model.parsedSections |> List.map evaluateSection
-        --
-        --        declarations ->
-        --            (declarations
-        --                |> List.map OutputError
-        --                |> ErrorSection
-        --            )
-        --                :: (model.parsedSections
-        --                        |> List.map evaluateSection
-        --                   )
-        --maybeDeclarations : Maybe (List String)
-        --maybeDeclarations =
-        --    Result.toMaybe maybeFile
-        --        |> Maybe.map
-        --            (\file ->
-        --                file
-        --                    |> .declarations
-        --                    |> List.map Node.value
-        --                    |> List.map extractNameFromDeclaration
-        --            )
-        --evaluatedSections : List Section
-        --evaluatedSections =
-        --    case maybeDeclarations of
-        --        Just declarations ->
-        --            (declarations
-        --                |> List.map (\name -> ", \"" ++ name ++ "\" = " ++ name)
-        --                |> List.map OutputError
-        --                |> ErrorSection
-        --            )
-        --                :: (model.parsedSections
-        --                        |> List.map evaluateSection
-        --                   )
-        --
-        --        Nothing ->
-        --            model.parsedSections |> List.map evaluateSection
     in
     case viewersError of
         Just error ->
-            ( viewers, ErrorSection [ OutputError "\"viewers\" failed to evaluate:", error ] :: evaluatedSections )
+            ( viewers, hostViewers, ErrorSection [ OutputError "\"viewers\" failed to evaluate:", error ] :: evaluatedSections )
 
         Nothing ->
-            ( viewers, evaluatedSections )
+            ( viewers, hostViewers, evaluatedSections )
 
 
 makeFile : FullCode -> Result Error File
@@ -505,11 +480,6 @@ makeFile (FullCode source) =
             Elm.Parser.parseToFile source
     in
     Result.mapError ParsingError file
-
-
-makeEnv : File -> Result Error Env
-makeEnv file =
-    Eval.Module.buildInitialEnv file
 
 
 sectionFromParsed : Interactives -> Interactives -> Result Error Env -> ( Code, Result error (List Cell) ) -> Section
@@ -1046,6 +1016,7 @@ view model =
                     (Element.text "elm-clerk")
                     :: viewError model.error
                     ++ (model.fileList |> List.map viewListItem)
+                    ++ getModuleName model.source
                     ++ (case ( model.source, model.currentFileName, model.error ) of
                             ( Just source, _, _ ) ->
                                 evaluateSections model source |> viewSections
@@ -1109,9 +1080,9 @@ defaultPadding =
     { top = 0, right = 0, bottom = 0, left = 0 }
 
 
-viewSections : ( List Viewer, List Section ) -> List (Element FrontendMsg)
-viewSections ( viewers, sections ) =
-    sections |> List.map (Element.Lazy.lazy (viewSection viewers))
+viewSections : ( List Viewer, List HostViewer, List Section ) -> List (Element FrontendMsg)
+viewSections ( viewers, hostViewers, sections ) =
+    sections |> List.map (Element.Lazy.lazy (viewSection viewers hostViewers))
 
 
 viewChart : Element msg
@@ -1146,9 +1117,23 @@ viewCode (Code code) =
             }
 
 
-viewSection : List Viewer -> Section -> Element FrontendMsg
-viewSection viewers section =
+viewSection : List Viewer -> List HostViewer -> Section -> Element FrontendMsg
+viewSection viewers hostViewers section =
     let
+        applyHostViewer : Value -> Maybe (Html.Html FrontendMsg)
+        applyHostViewer value =
+            List.Extra.stoppableFoldl
+                (\hostViewer _ ->
+                    case hostViewer value of
+                        Just transformed ->
+                            Stop (Just transformed)
+
+                        Nothing ->
+                            Continue Nothing
+                )
+                Nothing
+                hostViewers
+
         applyViewer : Value -> Result OutputError (Maybe (Html.Html FrontendMsg))
         applyViewer value =
             let
@@ -1180,14 +1165,20 @@ viewSection viewers section =
                     valueResult
 
                 Ok (OutputValue value) ->
-                    case applyViewer value of
-                        Err error ->
-                            Err error
+                    --case applyViewer value of
+                    --    Err error ->
+                    --        Err error
+                    --
+                    --    Ok (Just html) ->
+                    --        Ok (OutputHtml html)
+                    --
+                    --    Ok Nothing -k
+                    --Ok (OutputValue (String "Nope"))
+                    case applyHostViewer value of
+                        Just transformed ->
+                            Ok (OutputHtml transformed)
 
-                        Ok (Just html) ->
-                            Ok (OutputHtml html)
-
-                        Ok Nothing ->
+                        Nothing ->
                             Ok (OutputValue value)
     in
     Element.column [ width fill, paddingEach { top = 10, right = 0, bottom = 0, left = 0 } ]
