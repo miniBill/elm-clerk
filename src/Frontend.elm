@@ -32,6 +32,7 @@ import Html.Attributes exposing (style)
 import Http
 import Interactives exposing (interactivesEmpty, interactivesGet, interactivesInsert)
 import InterpreterTypes exposing (Env, Error(..), Eval, Value(..))
+import Json.Decode
 import Kernel
 import Kernel.Html
 import Lamdera exposing (sendToBackend)
@@ -46,7 +47,7 @@ import Regex
 import Result.Extra
 import Task
 import ToString exposing (annotationToString, deadEndsToStrings, errorToString, evalErrorDataToString, evalErrorKindToString, httpErrorToString, patternToString)
-import Types exposing (BackendMsg(..), Cell(..), Code(..), FrontendModel, FrontendMsg(..), FullCode(..), FunctionName(..), Interactives(..), Markdown(..), OutputError(..), OutputValue(..), ParameterName(..), ParsedSection, RawInteractiveValue(..), Section(..), ToBackend(..), ToFrontend(..), TypeName(..))
+import Types exposing (BackendMsg(..), Cell(..), Code(..), FileName(..), FrontendModel, FrontendMsg(..), FullCode(..), FunctionName(..), Interactives(..), Markdown(..), OutputError(..), OutputValue(..), ParameterName(..), ParsedSection, RawInteractiveValue(..), Section(..), ToBackend(..), ToFrontend(..), TypeName(..))
 import UI.Source as Source
 import Url
 import Value
@@ -75,17 +76,19 @@ app =
 init : Url.Url -> Nav.Key -> ( Model, Cmd FrontendMsg )
 init _ key =
     ( { key = key
+      , currentFileName = Nothing
       , source = Nothing
       , checksum = Nothing
       , parsedSections = []
       , evalInteractives = interactivesEmpty
       , inputInteractives = interactivesEmpty
       , error = ""
+      , fileList = []
       }
     , Cmd.batch
         [ Http.get
-            { url = "/_x/read/pages/Page1.elm"
-            , expect = Http.expectString GotText
+            { url = "/_x/list/pages/"
+            , expect = Http.expectJson GotList (Json.Decode.list Json.Decode.string)
             }
         , sendToBackend RequestStartup
         , notifyIn Poll 4000
@@ -153,8 +156,31 @@ update msg model =
                     , Cmd.none
                     )
 
+        GotList result ->
+            case result of
+                Ok list ->
+                    ( { model
+                        | fileList =
+                            list
+                                |> List.filter (String.endsWith ".elm")
+                                |> List.map FileName
+                      }
+                    , Cmd.none
+                    )
+
+                Err error ->
+                    ( { model
+                        | error =
+                            httpErrorToString error
+                      }
+                    , Cmd.none
+                    )
+
         WroteText _ ->
             ( model, Cmd.none )
+
+        ListItemClicked fileName ->
+            ( { model | currentFileName = Just fileName }, sendToBackend (NewFilenameToBackend fileName) )
 
         InteractiveUpdated names value ->
             let
@@ -192,7 +218,7 @@ updateFromBackend msg model =
         NoOpToFrontend ->
             ( model, Cmd.none )
 
-        Startup { interactives, scroll, checksum } ->
+        Startup { interactives, scroll, checksum, fileName } ->
             let
                 ( newModel, cmd ) =
                     updateFullSource
@@ -200,12 +226,19 @@ updateFromBackend msg model =
                             | inputInteractives = interactives
                             , evalInteractives = interactives
                             , checksum = Just checksum
+                            , currentFileName = fileName
                         }
             in
             ( newModel
             , Cmd.batch
                 [ Task.perform (\_ -> NoOp) (Browser.Dom.setViewport 0 scroll)
                 , cmd
+                , case fileName of
+                    Just currentFileName ->
+                        requestPage currentFileName
+
+                    Nothing ->
+                        Cmd.none
                 ]
             )
 
@@ -222,6 +255,19 @@ updateFromBackend msg model =
 
                 Nothing ->
                     ( { model | error = "Requested new source when there was no source yet" }, Cmd.none )
+
+        RequestNewFileNameToFrontend fileName ->
+            ( model
+            , requestPage fileName
+            )
+
+
+requestPage : FileName -> Cmd FrontendMsg
+requestPage (FileName fileName) =
+    Http.get
+        { url = "/_x/read/pages/" ++ fileName
+        , expect = Http.expectString GotText
+        }
 
 
 
@@ -999,23 +1045,40 @@ view model =
                     ]
                     (Element.text "elm-clerk")
                     :: viewError model.error
-                    ++ (case model.source of
-                            Just source ->
+                    ++ (model.fileList |> List.map viewListItem)
+                    ++ (case ( model.source, model.currentFileName, model.error ) of
+                            ( Just source, _, _ ) ->
                                 evaluateSections model source |> viewSections
 
-                            _ ->
-                                if model.error == "" then
-                                    [ Element.el
-                                        [ Font.family
-                                            [ Font.typeface "Quicksand"
-                                            , Font.sansSerif
-                                            ]
+                            ( _, Nothing, _ ) ->
+                                [ Element.el
+                                    [ Font.family
+                                        [ Font.typeface "Quicksand"
+                                        , Font.sansSerif
                                         ]
-                                        (Element.text "Loading...")
                                     ]
+                                    (Element.text
+                                        (if List.length model.fileList >= 0 then
+                                            "No file selected"
 
-                                else
-                                    []
+                                         else
+                                            "No .elm files in the pages folder. Create one!"
+                                        )
+                                    )
+                                ]
+
+                            ( _, _, "" ) ->
+                                [ Element.el
+                                    [ Font.family
+                                        [ Font.typeface "Quicksand"
+                                        , Font.sansSerif
+                                        ]
+                                    ]
+                                    (Element.text "Loading...")
+                                ]
+
+                            _ ->
+                                []
                        )
                 )
             )
@@ -1031,6 +1094,14 @@ viewError error =
 
         _ ->
             String.split "\n" error |> List.map OutputError |> List.map viewOutputError
+
+
+viewListItem : FileName -> Element FrontendMsg
+viewListItem (FileName listItem) =
+    Element.Input.button []
+        { onPress = Just (ListItemClicked (FileName listItem))
+        , label = Element.text listItem
+        }
 
 
 defaultPadding : { top : Int, right : Int, bottom : Int, left : Int }

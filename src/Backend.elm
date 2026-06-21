@@ -4,7 +4,7 @@ import Common exposing (notifyIn)
 import FastDict as Dict
 import Interactives exposing (interactivesEmpty)
 import Lamdera exposing (ClientId, SessionId, sendToFrontend)
-import Types exposing (BackendModel, BackendMsg(..), FrontendMsg(..), ToBackend(..), ToFrontend(..))
+import Types exposing (BackendModel, BackendMsg(..), FileName(..), FrontendMsg(..), ToBackend(..), ToFrontend(..))
 
 
 type alias Model =
@@ -26,6 +26,7 @@ init =
       , interactives = interactivesEmpty
       , scroll = 0
       , checksum = ""
+      , fileName = Nothing
       }
     , Cmd.none
     )
@@ -39,6 +40,9 @@ update msg model =
 
         RequestNewSource clientId ->
             ( model, sendToFrontend clientId RequestNewSourceToFrontend )
+
+        RequestNewFileName clientId fileName ->
+            ( model, sendToFrontend clientId (RequestNewFileNameToFrontend fileName) )
 
 
 updateFromFrontend : SessionId -> ClientId -> ToBackend -> Model -> ( Model, Cmd BackendMsg )
@@ -57,6 +61,7 @@ updateFromFrontend _ clientId msg model =
                     { interactives = model.interactives
                     , scroll = model.scroll
                     , checksum = model.checksum
+                    , fileName = model.fileName
                     }
                 )
             )
@@ -65,9 +70,7 @@ updateFromFrontend _ clientId msg model =
             ( { model | scroll = y }, Cmd.none )
 
         NewChecksumToBackend newChecksum ->
-            --( model, Cmd.none )
-            ( { model | checksum = newChecksum }, notifyIn (RequestNewSource clientId) 900 )
+            ( { model | checksum = newChecksum }, notifyIn (RequestNewSource clientId) 1000 )
 
-
-
---( { model | checksum = newChecksum }, sendToFrontend clientId RequestNewSourceToFrontend )
+        NewFilenameToBackend fileName ->
+            ( { model | fileName = Just fileName }, notifyIn (RequestNewFileName clientId fileName) 1000 )

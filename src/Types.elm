@@ -16,12 +16,14 @@ import Url exposing (Url)
 
 type alias FrontendModel =
     { key : Key
+    , currentFileName : Maybe FileName
     , source : Maybe FullCode
     , checksum : Maybe String
     , parsedSections : List ( Code, ParsedSection )
     , inputInteractives : Interactives
     , evalInteractives : Interactives
     , error : String
+    , fileList : List FileName
     }
 
 
@@ -30,6 +32,7 @@ type alias BackendModel =
     , interactives : Interactives
     , scroll : Float
     , checksum : String
+    , fileName : Maybe FileName
     }
 
 
@@ -87,6 +90,10 @@ type TypeName
     = TypeName String
 
 
+type FileName
+    = FileName String
+
+
 
 -- Messages
 
@@ -96,7 +103,9 @@ type FrontendMsg
     | UrlChanged Url
     | NoOpFrontendMsg
     | GotText (Result Http.Error String)
+    | GotList (Result Http.Error (List String))
     | WroteText (Result Http.Error ())
+    | ListItemClicked FileName
     | InteractiveUpdated ( FunctionName, ParameterName ) RawInteractiveValue
     | ReloadCode
     | Poll
@@ -110,17 +119,20 @@ type ToBackend
     | NewScrollToBackend Float
     | RequestStartup
     | NewChecksumToBackend String
+    | NewFilenameToBackend FileName
 
 
 type BackendMsg
     = NoOpBackendMsg
     | RequestNewSource ClientId
+    | RequestNewFileName ClientId FileName
 
 
 type ToFrontend
     = NoOpToFrontend
-    | Startup { interactives : Interactives, scroll : Float, checksum : String }
+    | Startup { interactives : Interactives, scroll : Float, checksum : String, fileName : Maybe FileName }
     | RequestNewSourceToFrontend
+    | RequestNewFileNameToFrontend FileName
 
 
 type Section
