@@ -20,7 +20,6 @@ def main():
                 with open(path, "r") as file_handle:
                     contents = file_handle.read()
                 if contents == CLEARED_CONTENTS:
-                    print("File already reset")
                     time.sleep(POLL_PERIOD)
                     continue
             except FileNotFoundError:
@@ -33,8 +32,6 @@ def main():
                     file_handle.write(CLEARED_CONTENTS)
 
                 print("Problem!")
-            else:
-                print("No problem!")
             time.sleep(POLL_PERIOD)
     except KeyboardInterrupt:
         pass

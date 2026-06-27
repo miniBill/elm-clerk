@@ -2,7 +2,7 @@ module Backend exposing (Model, app)
 
 import Common exposing (notifyIn)
 import FastDict as Dict
-import Interactives exposing (interactivesEmpty)
+import Interactives
 import Lamdera exposing (ClientId, SessionId, sendToFrontend)
 import Types exposing (BackendModel, BackendMsg(..), FileName(..), FrontendMsg(..), ToBackend(..), ToFrontend(..))
 
@@ -23,7 +23,7 @@ app =
 init : ( Model, Cmd BackendMsg )
 init =
     ( { message = "Hello!"
-      , interactives = interactivesEmpty
+      , interactives = Interactives.empty
       , scroll = 0
       , checksum = ""
       , fileName = Nothing

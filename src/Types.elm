@@ -19,17 +19,19 @@ type alias FrontendModel =
     , currentFileName : Maybe FileName
     , source : Maybe FullCode
     , checksum : Maybe String
-    , inputInteractives : Interactives
-    , evalInteractives : Interactives
     , error : String
     , fileList : List FileName
-
-        , viewers : List Viewer
-        , sections : List ( Code, List Section )
-        , outputs: FastDict String Value
+    , sections : List ( Code, List Section )
+    , inputInteractives : Interactives
+    , evalInteractives : Interactives
+    , functions : Dict String Function
+    , viewers : List Viewer
+    , outputs : Dict String Value
     }
 
-type alias
+
+type alias Function =
+    Int
 
 
 type alias BackendModel =
@@ -54,6 +56,8 @@ type Cell
     | CellDeclaration (Node Declaration)
 
 
+{-| Dictionary of (FunctionName,ParameterName) to user-provided value for that param
+-}
 type Interactives
     = Interactives (Dict ( String, String ) RawInteractiveValue)
 
@@ -62,43 +66,63 @@ type Interactives
 -- Various types of string
 
 
+{-| To be rendered as markdown
+-}
 type Markdown
     = Markdown String
 
 
+{-| The full code of a module
+-}
 type FullCode
     = FullCode String
 
 
+{-| A snippet of code
+-}
 type Code
     = Code String
 
 
+{-| The name of an interactive function
+-}
 type FunctionName
     = FunctionName String
 
 
+{-| The name of a parameter of an interactive function
+-}
 type ParameterName
     = ParameterName String
 
 
+{-| What the user puts into a field underneath a function, before validation or parsing
+-}
 type RawInteractiveValue
     = RawInteractiveValue String
 
 
+{-| Marked for being output in a monospace section
+-}
 type OutputError
     = OutputError String
 
 
+{-| The result of an interactive function
+-}
 type OutputValue
     = OutputValue Value
     | OutputHtml (Html.Html FrontendMsg)
 
 
+{-| A type name from parsing type annotations
+-}
 type TypeName
     = TypeName String
 
 
+{-| The name of a file in the pages folder, including the .elm extension
+-}
 type FileName
     = FileName String
 

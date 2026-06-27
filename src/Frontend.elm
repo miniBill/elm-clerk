@@ -6,13 +6,12 @@ import Browser.Navigation as Nav
 import Chart as C
 import Chart.Attributes as CA
 import Common exposing (notifyIn)
-import Element exposing (Attribute, Element, clipX, el, fill, height, maximum, minimum, paddingEach, paragraph, px, scrollbarX, scrollbarY, shrink, text, width)
+import Element exposing (Attribute, Element, clipX, el, fill, height, maximum, paddingEach, paragraph, scrollbarX, scrollbarY, shrink, text, width)
 import Element.Background
 import Element.Font as Font
 import Element.Input
 import Element.Lazy
 import Elm
-import Elm.CodeGen
 import Elm.Parser
 import Elm.Parser.Comments
 import Elm.Parser.Declarations
@@ -28,9 +27,9 @@ import Eval.Module
 import FastDict as Dict exposing (Dict)
 import Hash
 import Html
-import Html.Attributes exposing (style)
+import Html.Attributes
 import Http
-import Interactives exposing (interactivesEmpty, interactivesGet, interactivesInsert)
+import Interactives
 import InterpreterTypes exposing (Env, Error(..), Eval, Value(..))
 import Json.Decode
 import Kernel
@@ -42,12 +41,11 @@ import Markdown.Renderer
 import Markdown.Renderer.ElmUi
 import Parser exposing (DeadEnd)
 import ParserFast
-import Process
 import Regex
 import Result.Extra
 import Task
-import ToString exposing (annotationToString, deadEndsToStrings, errorToString, evalErrorDataToString, evalErrorKindToString, httpErrorToString, patternToString)
-import Types exposing (BackendMsg(..), Cell(..), Code(..), FileName(..), FrontendModel, FrontendMsg(..), FullCode(..), FunctionName(..), Interactives(..), Markdown(..), OutputError(..), OutputValue(..), ParameterName(..), ParsedSection, RawInteractiveValue(..), Section(..), ToBackend(..), ToFrontend(..), TypeName(..))
+import ToString exposing (annotationToString, errorToString, evalErrorDataToString, httpErrorToString, patternToString)
+import Types exposing (BackendMsg(..), Cell(..), Code(..), FileName(..), FrontendModel, FrontendMsg(..), FullCode(..), FunctionName(..), Interactives(..), Markdown(..), OutputError(..), OutputValue(..), ParameterName(..), ParsedSection, RawInteractiveValue(..), Section(..), ToBackend(..), ToFrontend(..), TypeName(..), Viewer)
 import UI.Source as Source
 import Url
 import Value
@@ -80,11 +78,14 @@ init _ key =
       , currentFileName = Nothing
       , source = Nothing
       , checksum = Nothing
-      , parsedSections = []
-      , evalInteractives = interactivesEmpty
-      , inputInteractives = interactivesEmpty
       , error = ""
       , fileList = []
+      , sections = []
+      , inputInteractives = Interactives.empty
+      , evalInteractives = Interactives.empty
+      , functions = Dict.empty
+      , viewers = []
+      , outputs = Dict.empty
       }
     , Cmd.batch
         [ Http.get
@@ -119,6 +120,19 @@ updateFullSource model =
             ( model, Cmd.none )
 
 
+generateInteractive : FullCode -> Model -> Model
+generateInteractive source model =
+    let
+        evaluated =
+            evaluateSections model source
+    in
+    { model
+        | functions = Dict.empty
+        , viewers = []
+        , outputs = Dict.empty
+    }
+
+
 update : FrontendMsg -> Model -> ( Model, Cmd FrontendMsg )
 update msg model =
     case msg of
@@ -143,11 +157,7 @@ update msg model =
         GotText result ->
             case result of
                 Ok source ->
-                    updateFullSource
-                        { model
-                            | source = FullCode source |> Just
-                            , parsedSections = parseSections (FullCode source)
-                        }
+                    ( generateInteractive (FullCode source) model, Cmd.none )
 
                 Err error ->
                     ( { model
@@ -187,7 +197,7 @@ update msg model =
         InteractiveUpdated names value ->
             let
                 newInteractives =
-                    interactivesInsert names value model.inputInteractives
+                    Interactives.insert names value model.inputInteractives
             in
             ( { model | inputInteractives = newInteractives }
             , Cmd.batch
@@ -197,7 +207,11 @@ update msg model =
             )
 
         ReloadCode ->
-            ( { model | evalInteractives = model.inputInteractives }, Cmd.none )
+            ( { model
+                | evalInteractives = model.inputInteractives
+              }
+            , Cmd.none
+            )
 
         Poll ->
             let
@@ -434,7 +448,7 @@ evaluateSections model source =
 
         evaluatedSections : List Section
         evaluatedSections =
-            model.parsedSections |> List.map evaluateSection
+            parseSections source |> List.map evaluateSection
     in
     case viewersError of
         Just error ->
@@ -565,7 +579,7 @@ handlePartiallyApplied evalInteractives inputInteractives source partiallyApplie
 
                         maybeRawValue : Maybe RawInteractiveValue
                         maybeRawValue =
-                            interactivesGet ( functionName, ParameterName binding ) evalInteractives
+                            Interactives.get ( functionName, ParameterName binding ) evalInteractives
 
                         typeNodeToValue : InteractiveElement -> RawInteractiveValue -> Result OutputError Value
                         typeNodeToValue typeNode rawValue =
@@ -783,7 +797,7 @@ viewInteractive : Interactives -> FunctionName -> ( ParameterName, TypeName ) ->
 viewInteractive interactiveValues functionName ( binding, TypeName typeName ) =
     let
         maybeValue =
-            interactivesGet ( functionName, binding ) interactiveValues
+            Interactives.get ( functionName, binding ) interactiveValues
 
         (ParameterName bindingString) =
             binding

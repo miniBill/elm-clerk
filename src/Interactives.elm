@@ -4,18 +4,18 @@ import FastDict as Dict
 import Types exposing (FunctionName(..), Interactives(..), ParameterName(..), RawInteractiveValue(..))
 
 
-interactivesEmpty : Interactives
-interactivesEmpty =
+empty : Interactives
+empty =
     Interactives Dict.empty
 
 
-interactivesInsert : ( FunctionName, ParameterName ) -> RawInteractiveValue -> Interactives -> Interactives
-interactivesInsert ( FunctionName functionName, ParameterName parameterName ) value (Interactives interactives) =
+insert : ( FunctionName, ParameterName ) -> RawInteractiveValue -> Interactives -> Interactives
+insert ( FunctionName functionName, ParameterName parameterName ) value (Interactives interactives) =
     Interactives (Dict.insert ( functionName, parameterName ) value interactives)
 
 
-interactivesGet : ( FunctionName, ParameterName ) -> Interactives -> Maybe RawInteractiveValue
-interactivesGet ( FunctionName functionName, ParameterName parameterName ) (Interactives interactives) =
+get : ( FunctionName, ParameterName ) -> Interactives -> Maybe RawInteractiveValue
+get ( FunctionName functionName, ParameterName parameterName ) (Interactives interactives) =
     Dict.get ( functionName, parameterName ) interactives
 
 
