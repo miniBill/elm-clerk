@@ -29,6 +29,7 @@ import Hash
 import Html
 import Html.Attributes
 import Http
+import IdDict
 import Interactives
 import InterpreterTypes exposing (Env, Error(..), Eval, PartiallyAppliedFunction(..), Value(..))
 import Json.Decode
@@ -46,7 +47,7 @@ import Regex
 import Result.Extra
 import Task
 import ToString exposing (annotationToString, errorToString, evalErrorDataToString, httpErrorToString, patternToString)
-import Types exposing (BackendMsg(..), Cell(..), Code(..), FileName(..), FrontendModel, FrontendMsg(..), FullCode(..), Function, FunctionName(..), HostViewer, Interactives(..), Markdown(..), Output, OutputError(..), OutputValue(..), ParameterName(..), ParsedSection, RawInteractiveValue(..), Section(..), ToBackend(..), ToFrontend(..), TypeName(..), Viewer)
+import Types exposing (BackendMsg(..), Cell(..), Code(..), FileName(..), FrontendModel, FrontendMsg(..), FullCode(..), Function, FunctionName(..), HostViewer, IdDict, Interactives(..), Markdown(..), Output, OutputError(..), OutputValue(..), ParameterName(..), ParsedSection, RawInteractiveValue(..), Section(..), ToBackend(..), ToFrontend(..), TypeName(..), Viewer)
 import UI.Source as Source
 import Url
 import Value
@@ -84,10 +85,10 @@ init _ key =
       , sections = []
       , inputInteractives = Interactives.empty
       , evalInteractives = Interactives.empty
-      , functions = Dict.empty
+      , functions = IdDict.empty (\(FunctionName functionName) -> functionName)
       , viewers = []
       , hostViewers = []
-      , outputs = Dict.empty
+      , outputs = IdDict.empty (\(FunctionName functionName) -> functionName)
       }
     , Cmd.batch
         [ Http.get
@@ -170,7 +171,7 @@ update msg model =
         GotText result ->
             case result of
                 Ok source ->
-                    Debug.log "( generateInteractive (FullCode source) model, notifyIn CheckGenerateOutputs 100 )" ( generateInteractive (FullCode source) model, notifyIn CheckGenerateOutputs 100 )
+                    ( generateInteractive (FullCode source) model, notifyIn CheckGenerateOutputs 100 )
 
                 Err error ->
                     ( { model
@@ -213,14 +214,14 @@ update msg model =
                 newInteractives =
                     Interactives.insert names value model.inputInteractives
 
-                (FunctionName functionName) =
+                functionName =
                     Tuple.first names
 
                 newOutput : Result OutputError OutputValue
                 newOutput =
                     calculateOutput newInteractives model.functions (Tuple.first names)
             in
-            ( { model | inputInteractives = newInteractives, outputs = Dict.insert functionName newOutput model.outputs }
+            ( { model | inputInteractives = newInteractives, outputs = IdDict.insert functionName newOutput model.outputs }
             , Cmd.batch
                 [ sendToBackend (InteractivesToBackend newInteractives)
                 , notifyIn ReloadCode 100
@@ -228,11 +229,11 @@ update msg model =
             )
 
         CheckGenerateOutputs ->
-            case Debug.log "( Dict.isEmpty model.functions, Maybe.Extra.isJust model.source, Dict.isEmpty model.outputs )" ( Dict.isEmpty model.functions, Maybe.Extra.isJust model.source, Dict.isEmpty model.outputs ) of
+            case ( IdDict.isEmpty model.functions, Maybe.Extra.isJust model.source, IdDict.isEmpty model.outputs ) of
                 ( False, True, True ) ->
                     let
                         newOutputs =
-                            Dict.map
+                            IdDict.map
                                 (\_ { function, declaration } ->
                                     applyPartiallyApplied model.evalInteractives function declaration
                                 )
@@ -403,7 +404,7 @@ getHostText fullSource =
 -- SECTIONS EVALUATION
 
 
-evaluateSections : Model -> FullCode -> Result Error Env -> ( List Viewer, List Section, Dict String Types.Function )
+evaluateSections : Model -> FullCode -> Result Error Env -> ( List Viewer, List Section, IdDict FunctionName Types.Function )
 evaluateSections model source maybeEnv =
     let
         viewerSelector : Kernel.InSelector (List (Value -> InterpreterTypes.Config -> Env -> InterpreterTypes.EvalResult (Maybe Kernel.Html.Html))) {}
@@ -458,7 +459,7 @@ evaluateSections model source maybeEnv =
                         Nothing
 
                     else
-                        Just (OutputError (Debug.log "error" error))
+                        Just (OutputError error)
 
         parsedSections : List ( Code, ParsedSection )
         parsedSections =
@@ -472,17 +473,18 @@ evaluateSections model source maybeEnv =
                             ( value, maybeFunction ) =
                                 evaluateSection item
 
+                            newFunctions : IdDict FunctionName Function
                             newFunctions =
                                 case maybeFunction of
-                                    Just ( FunctionName name, function ) ->
-                                        Dict.insert name function currentFunctions
+                                    Just ( name, function ) ->
+                                        IdDict.insert name function currentFunctions
 
                                     Nothing ->
                                         currentFunctions
                         in
                         ( value :: list, newFunctions )
                     )
-                    ( [], Dict.empty )
+                    ( [], IdDict.empty (\(FunctionName functionName) -> functionName) )
 
         --parsedSections |> List.map evaluateSection
     in
@@ -767,9 +769,9 @@ sectionFromParsed maybeEnv ( source, parsedSection ) =
 --                    InteractiveSection source elements (Err functionOutputError)
 
 
-calculateOutput : Interactives -> Dict String Function -> FunctionName -> Output
-calculateOutput interactives functions (FunctionName functionName) =
-    case Dict.get functionName functions of
+calculateOutput : Interactives -> IdDict FunctionName Function -> FunctionName -> Output
+calculateOutput interactives functions functionName =
+    case IdDict.get functionName functions of
         Just { function, declaration } ->
             applyPartiallyApplied interactives function declaration
 
@@ -1298,7 +1300,7 @@ defaultPadding =
     { top = 0, right = 0, bottom = 0, left = 0 }
 
 
-viewSections : List Viewer -> List HostViewer -> Dict String Output -> List Section -> List (Element FrontendMsg)
+viewSections : List Viewer -> List HostViewer -> IdDict FunctionName Output -> List Section -> List (Element FrontendMsg)
 viewSections viewers hostViewers outputs sections =
     sections |> List.map (Element.Lazy.lazy (viewSection viewers hostViewers outputs))
 
@@ -1335,7 +1337,7 @@ viewCode (Code code) =
             }
 
 
-viewSection : List Viewer -> List HostViewer -> Dict String Output -> Section -> Element FrontendMsg
+viewSection : List Viewer -> List HostViewer -> IdDict FunctionName Output -> Section -> Element FrontendMsg
 viewSection viewers hostViewers outputs section =
     let
         applyHostViewer : Value -> Maybe (Html.Html FrontendMsg)
@@ -1417,9 +1419,9 @@ viewSection viewers hostViewers outputs section =
                         viewOutputError value
                 ]
 
-            InteractiveSection code (FunctionName functionName) ->
+            InteractiveSection code functionName ->
                 [ viewCode code ]
-                    ++ (case Dict.get functionName outputs of
+                    ++ (case IdDict.get functionName outputs of
                             Nothing ->
                                 [ viewOutputError (OutputError "No function with this name found!") ]
 

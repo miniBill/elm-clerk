@@ -24,10 +24,10 @@ type alias FrontendModel =
     , sections : List Section
     , inputInteractives : Interactives
     , evalInteractives : Interactives
-    , functions : Dict String Function
+    , functions : IdDict FunctionName Function
     , viewers : List Viewer
     , hostViewers : List HostViewer
-    , outputs : Dict String Output
+    , outputs : IdDict FunctionName Output
     }
 
 
@@ -74,9 +74,11 @@ type Interactives
     = Interactives (Dict ( String, String ) RawInteractiveValue)
 
 
+type IdDict kind value
+    = IdDict (Dict String value) (kind -> String)
 
---type IdDict
---    = IdDict (Dict ( String, String ) RawInteractiveValue)
+
+
 -- Various types of string
 
 
