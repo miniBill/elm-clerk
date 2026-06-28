@@ -41,7 +41,10 @@ type alias BackendModel =
 
 
 type alias Function =
-    ( PartiallyAppliedFunction, Declaration )
+    { function : PartiallyAppliedFunction
+    , declaration : Declaration
+    , pairs : List ( ParameterName, TypeName )
+    }
 
 
 type alias Output =
@@ -72,6 +75,8 @@ type Interactives
 
 
 
+--type IdDict
+--    = IdDict (Dict ( String, String ) RawInteractiveValue)
 -- Various types of string
 
 

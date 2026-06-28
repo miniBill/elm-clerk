@@ -233,7 +233,7 @@ update msg model =
                     let
                         newOutputs =
                             Dict.map
-                                (\_ ( function, declaration ) ->
+                                (\_ { function, declaration } ->
                                     applyPartiallyApplied model.evalInteractives function declaration
                                 )
                                 model.functions
@@ -442,7 +442,7 @@ evaluateSections model source maybeEnv =
 
         evaluateSection : ( Code, ParsedSection ) -> ( Section, Maybe ( FunctionName, Function ) )
         evaluateSection sectionResult =
-            sectionFromParsed model.evalInteractives model.inputInteractives maybeEnv sectionResult
+            sectionFromParsed maybeEnv sectionResult
 
         viewersError : Maybe OutputError
         viewersError =
@@ -516,8 +516,8 @@ makeFile (FullCode source) =
     Result.mapError ParsingError file
 
 
-sectionFromParsed : Interactives -> Interactives -> Result Error Env -> ( Code, Result error (List Cell) ) -> ( Section, Maybe ( FunctionName, Function ) )
-sectionFromParsed evalInteractives inputInteractives maybeEnv ( source, parsedSection ) =
+sectionFromParsed : Result Error Env -> ( Code, Result error (List Cell) ) -> ( Section, Maybe ( FunctionName, Function ) )
+sectionFromParsed maybeEnv ( source, parsedSection ) =
     case parsedSection of
         Ok cells ->
             let
@@ -547,21 +547,68 @@ sectionFromParsed evalInteractives inputInteractives maybeEnv ( source, parsedSe
             case lastCode of
                 Just (CellDeclaration (Node _ declaration)) ->
                     let
-                        expressionName : FunctionName
-                        expressionName =
+                        functionName : FunctionName
+                        functionName =
                             extractNameFromDeclaration declaration |> FunctionName
 
                         evaluated : Result OutputError Value
                         evaluated =
-                            evaluateName maybeEnv expressionName
+                            evaluateName maybeEnv functionName
+
+                        --maybePairs : Result OutputError (List ( ParameterName, TypeName ))
+                        --maybePairs =
+                        --    parseTogether (patterns |> List.map Node.value) declaration (List.length alreadyApplied)
+                        --
+                        --                        parameterNames : List ParameterName
+                        --                        parameterNames =
+                        --        interactiveElements : Result OutputError (List (Element FrontendMsg))
+                        --        interactiveElements =
+                        --            case ( maybePairs, maybeValuePairs ) of
+                        --                ( Ok pairs, Ok _ ) ->
+                        --                    pairs
+                        --                        |> Result.Extra.combineMap (viewInteractive inputInteractives functionName)
+                        --                        |> Result.Extra.extract (\error -> viewOutputError error |> List.singleton)
+                        --                        |> Ok
+                        --
+                        --                ( Err error, _ ) ->
+                        --                    error
+                        --                        |> Err
+                        --
+                        --                ( _, Err error ) ->
+                        --                    error
+                        --                        |> Err
                     in
                     case evaluated of
                         Err error ->
                             ( EvaluatedSection source (Err error), Nothing )
 
-                        Ok (PartiallyApplied functionDeclaration) ->
-                            --applyPartiallyApplied evalInteractives inputInteractives source functionDeclaration declaration
-                            ( InteractiveSection source expressionName, Just ( expressionName, ( functionDeclaration, declaration ) ) )
+                        Ok (PartiallyApplied ((PartiallyAppliedFunction _ alreadyApplied patterns _ _) as function)) ->
+                            let
+                                maybePairs : Result OutputError (List ( ParameterName, TypeName ))
+                                maybePairs =
+                                    parseTogether (patterns |> List.map Node.value) declaration (List.length alreadyApplied)
+
+                                --    interactiveElements : Result OutputError (List (Element FrontendMsg))
+                                --    interactiveElements =
+                                --        Result.withDefault [] maybePairs
+                                --            |> Result.Extra.combineMap (viewInteractive functionName)
+                                --            |> Result.Extra.extract (\error -> viewOutputError error |> List.singleton)
+                                --            |> Ok
+                            in
+                            case maybePairs of
+                                Err error ->
+                                    ( EvaluatedSection source (Err error), Nothing )
+
+                                Ok pairs ->
+                                    ( InteractiveSection source functionName
+                                    , Just
+                                        ( functionName
+                                        , { function = function
+                                          , declaration = declaration
+                                          , pairs = pairs
+                                          }
+                                        )
+                                    )
 
                         Ok value ->
                             ( EvaluatedSection source (value |> OutputValue |> Ok), Nothing )
@@ -720,10 +767,10 @@ sectionFromParsed evalInteractives inputInteractives maybeEnv ( source, parsedSe
 --                    InteractiveSection source elements (Err functionOutputError)
 
 
-calculateOutput : Interactives -> Dict String ( PartiallyAppliedFunction, Declaration ) -> FunctionName -> Output
+calculateOutput : Interactives -> Dict String Function -> FunctionName -> Output
 calculateOutput interactives functions (FunctionName functionName) =
     case Dict.get functionName functions of
-        Just ( function, declaration ) ->
+        Just { function, declaration } ->
             applyPartiallyApplied interactives function declaration
 
         Nothing ->
