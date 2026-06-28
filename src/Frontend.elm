@@ -1053,7 +1053,7 @@ viewInteractive interactives functionName ( (ParameterName bindingString) as bin
             viewOutputError (OutputError (bindingString ++ " - Interactive input of \"" ++ typeName ++ "\" not supported"))
 
         Just interactiveElement ->
-            Element.Lazy.lazy2 interactiveElement.element ( functionName, binding ) maybeValue
+            Element.Lazy.lazy3 interactiveElement.element functionName binding maybeValue
 
 
 typeNodeMap : Dict String InteractiveElement
@@ -1078,7 +1078,7 @@ typeNodeMap =
 type alias InteractiveElement =
     { key : TypeName
     , conversion : RawInteractiveValue -> Result OutputError Value
-    , element : ( FunctionName, ParameterName ) -> Maybe RawInteractiveValue -> Element FrontendMsg
+    , element : FunctionName -> ParameterName -> Maybe RawInteractiveValue -> Element FrontendMsg
     }
 
 
@@ -1342,13 +1342,16 @@ viewChart =
 
 
 viewCode : Code -> Element msg
-viewCode (Code code) =
-    Element.el [ width maxWidth ] <|
-        Source.viewExpression [ scrollbarX, monospace ]
-            { highlight = Nothing
-            , buttons = []
-            , source = code
-            }
+viewCode =
+    Element.Lazy.lazy
+        (\(Code code) ->
+            Element.el [ width maxWidth ] <|
+                Source.viewExpression [ scrollbarX, monospace ]
+                    { highlight = Nothing
+                    , buttons = []
+                    , source = code
+                    }
+        )
 
 
 viewSection : List Viewer -> List HostViewer -> IdDict FunctionName Output -> IdDict FunctionName Function -> Interactives -> Section -> Element FrontendMsg
@@ -1464,30 +1467,33 @@ viewSection viewers hostViewers outputs functions interactives section =
 
 
 viewMarkdownHtml : Markdown -> Element FrontendMsg
-viewMarkdownHtml markdown =
-    let
-        markdownView : Markdown -> Result String (List (Html.Html msg))
-        markdownView (Markdown localMarkdown) =
-            localMarkdown
-                |> Markdown.Parser.parse
-                |> Result.mapError (\error -> error |> List.map Markdown.Parser.deadEndToString |> String.join "\n")
-                |> Result.andThen (Markdown.Renderer.render Markdown.Renderer.defaultHtmlRenderer)
-    in
-    case markdownView markdown of
-        Ok values ->
-            values
-                |> Html.div []
-                |> Element.html
-                |> Element.el
-                    [ width maxWidth
-                    , Font.family
-                        [ Font.typeface "Fira Sans"
-                        , Font.sansSerif
-                        ]
-                    ]
+viewMarkdownHtml =
+    Element.Lazy.lazy
+        (\markdown ->
+            let
+                markdownView : Markdown -> Result String (List (Html.Html msg))
+                markdownView (Markdown localMarkdown) =
+                    localMarkdown
+                        |> Markdown.Parser.parse
+                        |> Result.mapError (\error -> error |> List.map Markdown.Parser.deadEndToString |> String.join "\n")
+                        |> Result.andThen (Markdown.Renderer.render Markdown.Renderer.defaultHtmlRenderer)
+            in
+            case markdownView markdown of
+                Ok values ->
+                    values
+                        |> Html.div []
+                        |> Element.html
+                        |> Element.el
+                            [ width maxWidth
+                            , Font.family
+                                [ Font.typeface "Fira Sans"
+                                , Font.sansSerif
+                                ]
+                            ]
 
-        Err err ->
-            Element.text err
+                Err err ->
+                    Element.text err
+        )
 
 
 viewMarkdown : Markdown -> Element FrontendMsg
@@ -1510,32 +1516,38 @@ viewMarkdown markdown =
 
 
 viewOutputValue : OutputValue -> Element FrontendMsg
-viewOutputValue outputValue =
-    let
-        viewHtml : Html.Html FrontendMsg -> Element FrontendMsg
-        viewHtml html =
-            html
-                |> Element.html
-                |> Element.el [ Element.paddingEach { top = 12, right = graySidePadding, bottom = 4, left = graySidePadding } ]
-    in
-    case outputValue of
-        OutputHtml html ->
-            viewHtml html
-
-        OutputValue value ->
-            case Kernel.html.fromValue value of
-                Just html ->
+viewOutputValue =
+    Element.Lazy.lazy
+        (\outputValue ->
+            let
+                viewHtml : Html.Html FrontendMsg -> Element FrontendMsg
+                viewHtml html =
                     html
-                        |> Kernel.Html.htmlToReal
-                        |> viewHtml
+                        |> Element.html
+                        |> Element.el [ Element.paddingEach { top = 12, right = graySidePadding, bottom = 4, left = graySidePadding } ]
+            in
+            case outputValue of
+                OutputHtml html ->
+                    viewHtml html
 
-                _ ->
-                    viewOutput ("-> " ++ Value.toString value)
+                OutputValue value ->
+                    case Kernel.html.fromValue value of
+                        Just html ->
+                            html
+                                |> Kernel.Html.htmlToReal
+                                |> viewHtml
+
+                        _ ->
+                            viewOutput ("-> " ++ Value.toString value)
+        )
 
 
 viewOutputError : OutputError -> Element FrontendMsg
-viewOutputError (OutputError output) =
-    viewOutput output
+viewOutputError =
+    Element.Lazy.lazy
+        (\(OutputError output) ->
+            viewOutput output
+        )
 
 
 viewOutput : String -> Element msg
@@ -1558,8 +1570,8 @@ viewOutput output =
                 (paragraph [ monospace, Font.size 20 ] [ text output ])
 
 
-viewTextInput : String -> ( FunctionName, ParameterName ) -> Maybe RawInteractiveValue -> Element FrontendMsg
-viewTextInput typeName ( functionName, ParameterName parameterName ) maybeRawValue =
+viewTextInput : String -> FunctionName -> ParameterName -> Maybe RawInteractiveValue -> Element FrontendMsg
+viewTextInput typeName functionName (ParameterName parameterName) maybeRawValue =
     let
         maybeValue : Maybe String
         maybeValue =
