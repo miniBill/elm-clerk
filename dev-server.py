@@ -23,12 +23,12 @@ def main():
 
     try:
         while True:
+            time.sleep(POLL_PERIOD)
             path = "src/Host.elm"
             try:
                 with open(path, "r") as file_handle:
                     contents = file_handle.read()
                 if contents == CLEARED_CONTENTS:
-                    time.sleep(POLL_PERIOD)
                     continue
             except FileNotFoundError:
                 pass
@@ -40,7 +40,6 @@ def main():
                     file_handle.write(CLEARED_CONTENTS)
 
                 print("Problem!")
-            time.sleep(POLL_PERIOD)
     except KeyboardInterrupt:
         pass
     finally:
