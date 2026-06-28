@@ -143,7 +143,7 @@ firstGeneration =
 
 evolvePreset : List (List Int)
 evolvePreset =
-    evolve 1
+    evolve 4
 
 
 
