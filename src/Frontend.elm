@@ -101,52 +101,6 @@ init _ key =
     )
 
 
-updateFullSource : FrontendModel -> ( FrontendModel, Cmd FrontendMsg )
-updateFullSource model =
-    case ( model.source, model.checksum ) of
-        ( Just (FullCode source), Just modelChecksum ) ->
-            let
-                checksum =
-                    source |> Hash.fromString |> Hash.toString
-            in
-            if checksum == modelChecksum then
-                ( model, Cmd.none )
-
-            else
-                ( { model | checksum = Just checksum }
-                , Cmd.batch
-                    [ sendToBackend (NewChecksumToBackend checksum)
-                    ]
-                )
-
-        _ ->
-            ( model, Cmd.none )
-
-
-generateInteractive : FullCode -> Model -> Model
-generateInteractive source model =
-    let
-        maybeFile : Result Error File
-        maybeFile =
-            makeFile source
-
-        maybeEnv : Result Error Env
-        maybeEnv =
-            maybeFile
-                |> Result.andThen Eval.Module.buildInitialEnv
-
-        ( viewers, sections, functions ) =
-            evaluateSections source maybeEnv
-    in
-    { model
-        | source = Just source
-        , functions = functions
-        , viewers = viewers
-        , hostViewers = makeHostViewers maybeEnv
-        , sections = sections
-    }
-
-
 update : FrontendMsg -> Model -> ( Model, Cmd FrontendMsg )
 update msg model =
     case msg of
@@ -171,7 +125,7 @@ update msg model =
         GotText result ->
             case result of
                 Ok source ->
-                    ( generateInteractive (FullCode source) model, notifyIn CheckGenerateOutputs 100 )
+                    ( evaluateFullSource (FullCode source) model, notifyIn CheckGenerateOutputs 100 )
 
                 Err error ->
                     ( { model
@@ -331,6 +285,28 @@ updateFromBackend msg model =
             )
 
 
+updateFullSource : Model -> ( Model, Cmd FrontendMsg )
+updateFullSource model =
+    case ( model.source, model.checksum ) of
+        ( Just (FullCode source), Just modelChecksum ) ->
+            let
+                checksum =
+                    source |> Hash.fromString |> Hash.toString
+            in
+            if checksum == modelChecksum then
+                ( model, Cmd.none )
+
+            else
+                ( { model | checksum = Just checksum }
+                , Cmd.batch
+                    [ sendToBackend (NewChecksumToBackend checksum)
+                    ]
+                )
+
+        _ ->
+            ( model, Cmd.none )
+
+
 requestPage : FileName -> Cmd FrontendMsg
 requestPage (FileName fileName) =
     Http.get
@@ -415,6 +391,30 @@ getHostText fullSource =
 
 
 -- SECTIONS EVALUATION
+
+
+evaluateFullSource : FullCode -> Model -> Model
+evaluateFullSource source model =
+    let
+        maybeFile : Result Error File
+        maybeFile =
+            makeFile source
+
+        maybeEnv : Result Error Env
+        maybeEnv =
+            maybeFile
+                |> Result.andThen Eval.Module.buildInitialEnv
+
+        ( viewers, sections, functions ) =
+            evaluateSections source maybeEnv
+    in
+    { model
+        | source = Just source
+        , functions = functions
+        , viewers = viewers
+        , hostViewers = makeHostViewers maybeEnv
+        , sections = sections
+    }
 
 
 evaluateSections : FullCode -> Result Error Env -> ( List Viewer, List Section, IdDict FunctionName Types.Function )
@@ -854,21 +854,6 @@ parseValuesTogetherSingle ( pattern, rootValue ) =
 -- INTERACTIVE
 
 
-viewInteractive : Interactives -> FunctionName -> ( ParameterName, TypeName ) -> Element FrontendMsg
-viewInteractive interactives functionName ( (ParameterName bindingString) as binding, TypeName typeName ) =
-    let
-        maybeValue : Maybe RawInteractiveValue
-        maybeValue =
-            Interactives.get ( functionName, binding ) interactives
-    in
-    case Dict.get typeName typeNodeMap of
-        Nothing ->
-            viewOutputError (OutputError (bindingString ++ " - Interactive input of \"" ++ typeName ++ "\" not supported"))
-
-        Just interactiveElement ->
-            Element.Lazy.lazy3 interactiveElement.element functionName binding maybeValue
-
-
 typeNodeMap : Dict String InteractiveElement
 typeNodeMap =
     [ interactiveElementInt
@@ -1045,7 +1030,7 @@ view model =
                     ]
                     (Element.text "elm-clerk")
                     :: viewError model.error
-                    ++ (model.fileList |> List.map viewListItem)
+                    ++ (model.fileList |> List.map viewFileListItem)
                     ++ (case ( model.source, model.currentFileName, model.error ) of
                             ( Just source, _, _ ) ->
                                 model.sections
@@ -1094,62 +1079,12 @@ view model =
     }
 
 
-viewError : String -> List (Element FrontendMsg)
-viewError error =
-    case error of
-        "" ->
-            []
-
-        _ ->
-            String.split "\n" error |> List.map OutputError |> List.map viewOutputError
-
-
-viewListItem : FileName -> Element FrontendMsg
-viewListItem (FileName listItem) =
+viewFileListItem : FileName -> Element FrontendMsg
+viewFileListItem (FileName listItem) =
     Element.Input.button []
         { onPress = Just (ListItemClicked (FileName listItem))
         , label = Element.text listItem
         }
-
-
-defaultPadding : { top : Int, right : Int, bottom : Int, left : Int }
-defaultPadding =
-    { top = 0, right = 0, bottom = 0, left = 0 }
-
-
-viewChart : Element msg
-viewChart =
-    Element.el [ width maxWidth, Element.paddingEach { top = 40, left = 40, right = 40, bottom = 0 } ] <|
-        Element.html <|
-            C.chart
-                [ CA.height 200
-                , CA.width 300
-                , CA.padding { top = 10, bottom = 5, left = 10, right = 10 }
-                ]
-                [ C.xLabels []
-                , C.yLabels [ CA.withGrid ]
-                , C.series .x
-                    [ C.interpolated .y [ CA.monotone ] [ CA.circle ]
-                    , C.interpolated .z [ CA.monotone ] [ CA.square ]
-                    ]
-                    [ { x = 1, y = 2, z = 3 }
-                    , { x = 5, y = 4, z = 1 }
-                    , { x = 10, y = 2, z = 4 }
-                    ]
-                ]
-
-
-viewCode : Code -> Element msg
-viewCode =
-    Element.Lazy.lazy
-        (\(Code code) ->
-            Element.el [ width maxWidth ] <|
-                Source.viewExpression [ scrollbarX, monospace ]
-                    { highlight = Nothing
-                    , buttons = []
-                    , source = code
-                    }
-        )
 
 
 viewSection : List Viewer -> List HostViewer -> IdDict FunctionName Output -> IdDict FunctionName Function -> Interactives -> Section -> Element FrontendMsg
@@ -1263,6 +1198,21 @@ viewSection viewers hostViewers outputs functions interactives section =
         )
 
 
+viewInteractive : Interactives -> FunctionName -> ( ParameterName, TypeName ) -> Element FrontendMsg
+viewInteractive interactives functionName ( (ParameterName bindingString) as binding, TypeName typeName ) =
+    let
+        maybeValue : Maybe RawInteractiveValue
+        maybeValue =
+            Interactives.get ( functionName, binding ) interactives
+    in
+    case Dict.get typeName typeNodeMap of
+        Nothing ->
+            viewOutputError (OutputError (bindingString ++ " - Interactive input of \"" ++ typeName ++ "\" not supported"))
+
+        Just interactiveElement ->
+            Element.Lazy.lazy3 interactiveElement.element functionName binding maybeValue
+
+
 viewMarkdownHtml : Markdown -> Element FrontendMsg
 viewMarkdownHtml =
     Element.Lazy.lazy
@@ -1310,6 +1260,51 @@ viewMarkdown markdown =
 
         Err err ->
             Element.text err
+
+
+viewChart : Element msg
+viewChart =
+    Element.el [ width maxWidth, Element.paddingEach { top = 40, left = 40, right = 40, bottom = 0 } ] <|
+        Element.html <|
+            C.chart
+                [ CA.height 200
+                , CA.width 300
+                , CA.padding { top = 10, bottom = 5, left = 10, right = 10 }
+                ]
+                [ C.xLabels []
+                , C.yLabels [ CA.withGrid ]
+                , C.series .x
+                    [ C.interpolated .y [ CA.monotone ] [ CA.circle ]
+                    , C.interpolated .z [ CA.monotone ] [ CA.square ]
+                    ]
+                    [ { x = 1, y = 2, z = 3 }
+                    , { x = 5, y = 4, z = 1 }
+                    , { x = 10, y = 2, z = 4 }
+                    ]
+                ]
+
+
+viewCode : Code -> Element msg
+viewCode =
+    Element.Lazy.lazy
+        (\(Code code) ->
+            Element.el [ width maxWidth ] <|
+                Source.viewExpression [ scrollbarX, monospace ]
+                    { highlight = Nothing
+                    , buttons = []
+                    , source = code
+                    }
+        )
+
+
+viewError : String -> List (Element FrontendMsg)
+viewError error =
+    case error of
+        "" ->
+            []
+
+        _ ->
+            String.split "\n" error |> List.map OutputError |> List.map viewOutputError
 
 
 viewOutputValue : OutputValue -> Element FrontendMsg
@@ -1385,6 +1380,11 @@ viewTextInput typeName functionName (ParameterName parameterName) maybeRawValue 
                     (Element.text (parameterName ++ " : " ++ typeName ++ " = " ++ Maybe.withDefault "" maybeValue))
             }
         ]
+
+
+defaultPadding : { top : Int, right : Int, bottom : Int, left : Int }
+defaultPadding =
+    { top = 0, right = 0, bottom = 0, left = 0 }
 
 
 maxWidth : Element.Length
