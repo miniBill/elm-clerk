@@ -83,12 +83,12 @@ init _ key =
       , error = ""
       , fileList = []
       , sections = []
-      , inputInteractives = Interactives.empty
-      , evalInteractives = Interactives.empty
+      , interactives = Interactives.empty
       , functions = IdDict.empty (\(FunctionName functionName) -> functionName)
       , viewers = []
       , hostViewers = []
       , outputs = IdDict.empty (\(FunctionName functionName) -> functionName)
+      , reloadRequests = IdDict.empty (\(FunctionName functionName) -> functionName)
       }
     , Cmd.batch
         [ Http.get
@@ -206,25 +206,35 @@ update msg model =
             ( model, Cmd.none )
 
         ListItemClicked fileName ->
-            ( { model | currentFileName = Just fileName }, sendToBackend (NewFilenameToBackend fileName) )
+            ( { model
+                | currentFileName = Just fileName
+                , outputs = IdDict.clear model.outputs
+              }
+            , sendToBackend (NewFilenameToBackend fileName)
+            )
 
         InteractiveUpdated names value ->
             let
                 newInteractives : Interactives
                 newInteractives =
-                    Interactives.insert names value model.inputInteractives
+                    Interactives.insert names value model.interactives
 
                 functionName =
                     Tuple.first names
 
-                newOutput : Result OutputError OutputValue
-                newOutput =
-                    calculateOutput newInteractives model.functions (Tuple.first names)
+                requestIndex : Int
+                requestIndex =
+                    IdDict.get functionName model.reloadRequests
+                        |> Maybe.withDefault 0
+                        |> (\x -> x + 1)
             in
-            ( { model | inputInteractives = newInteractives, outputs = IdDict.insert functionName newOutput model.outputs }
+            ( { model
+                | interactives = newInteractives
+                , reloadRequests = IdDict.insert functionName requestIndex model.reloadRequests
+              }
             , Cmd.batch
                 [ sendToBackend (InteractivesToBackend newInteractives)
-                , notifyIn ReloadCode 100
+                , notifyIn (ReloadFunction functionName requestIndex) 400
                 ]
             )
 
@@ -235,7 +245,7 @@ update msg model =
                         newOutputs =
                             IdDict.map
                                 (\_ { function, declaration } ->
-                                    applyPartiallyApplied model.evalInteractives function declaration
+                                    applyPartiallyApplied model.interactives function declaration
                                 )
                                 model.functions
                     in
@@ -244,12 +254,17 @@ update msg model =
                 _ ->
                     ( model, Cmd.none )
 
-        ReloadCode ->
-            ( { model
-                | evalInteractives = model.inputInteractives
-              }
-            , Cmd.none
-            )
+        ReloadFunction functionName requestIndex ->
+            if requestIndex == (IdDict.get functionName model.reloadRequests |> Maybe.withDefault 0) then
+                let
+                    newOutput : Result OutputError OutputValue
+                    newOutput =
+                        calculateOutput model.interactives model.functions functionName
+                in
+                ( { model | outputs = IdDict.insert functionName newOutput model.outputs }, Cmd.none )
+
+            else
+                ( model, Cmd.none )
 
         Poll ->
             let
@@ -277,8 +292,7 @@ updateFromBackend msg model =
                 ( newModel, cmd ) =
                     updateFullSource
                         { model
-                            | inputInteractives = interactives
-                            , evalInteractives = interactives
+                            | interactives = interactives
                             , checksum = Just checksum
                             , currentFileName = fileName
                         }
@@ -1027,21 +1041,19 @@ parseValuesTogetherSingle ( pattern, rootValue ) =
 -- INTERACTIVE
 
 
-viewInteractive : Interactives -> FunctionName -> ( ParameterName, TypeName ) -> Result OutputError (Element FrontendMsg)
-viewInteractive interactiveValues functionName ( binding, TypeName typeName ) =
+viewInteractive : Interactives -> FunctionName -> ( ParameterName, TypeName ) -> Element FrontendMsg
+viewInteractive interactives functionName ( (ParameterName bindingString) as binding, TypeName typeName ) =
     let
+        maybeValue : Maybe RawInteractiveValue
         maybeValue =
-            Interactives.get ( functionName, binding ) interactiveValues
-
-        (ParameterName bindingString) =
-            binding
+            Interactives.get ( functionName, binding ) interactives
     in
     case Dict.get typeName typeNodeMap of
         Nothing ->
-            Err (OutputError (bindingString ++ " - Interactive input of \"" ++ typeName ++ "\" not supported"))
+            viewOutputError (OutputError (bindingString ++ " - Interactive input of \"" ++ typeName ++ "\" not supported"))
 
         Just interactiveElement ->
-            Ok (interactiveElement.element ( functionName, binding ) maybeValue)
+            Element.Lazy.lazy2 interactiveElement.element ( functionName, binding ) maybeValue
 
 
 typeNodeMap : Dict String InteractiveElement
@@ -1238,7 +1250,14 @@ view model =
                     ++ (model.fileList |> List.map viewListItem)
                     ++ (case ( model.source, model.currentFileName, model.error ) of
                             ( Just source, _, _ ) ->
-                                viewSections model.viewers model.hostViewers model.outputs model.sections
+                                model.sections
+                                    |> List.map
+                                        (viewSection model.viewers
+                                            model.hostViewers
+                                            model.outputs
+                                            model.functions
+                                            model.interactives
+                                        )
 
                             --[ Element.text "Source" ]
                             ( _, Nothing, _ ) ->
@@ -1300,11 +1319,6 @@ defaultPadding =
     { top = 0, right = 0, bottom = 0, left = 0 }
 
 
-viewSections : List Viewer -> List HostViewer -> IdDict FunctionName Output -> List Section -> List (Element FrontendMsg)
-viewSections viewers hostViewers outputs sections =
-    sections |> List.map (Element.Lazy.lazy (viewSection viewers hostViewers outputs))
-
-
 viewChart : Element msg
 viewChart =
     Element.el [ width maxWidth, Element.paddingEach { top = 40, left = 40, right = 40, bottom = 0 } ] <|
@@ -1337,8 +1351,8 @@ viewCode (Code code) =
             }
 
 
-viewSection : List Viewer -> List HostViewer -> IdDict FunctionName Output -> Section -> Element FrontendMsg
-viewSection viewers hostViewers outputs section =
+viewSection : List Viewer -> List HostViewer -> IdDict FunctionName Output -> IdDict FunctionName Function -> Interactives -> Section -> Element FrontendMsg
+viewSection viewers hostViewers outputs functions interactives section =
     let
         applyHostViewer : Value -> Maybe (Html.Html FrontendMsg)
         applyHostViewer value =
@@ -1421,18 +1435,21 @@ viewSection viewers hostViewers outputs section =
 
             InteractiveSection code functionName ->
                 [ viewCode code ]
-                    ++ (case IdDict.get functionName outputs of
+                    ++ (case Maybe.map2 Tuple.pair (IdDict.get functionName outputs) (IdDict.get functionName functions) of
                             Nothing ->
-                                [ viewOutputError (OutputError "No function with this name found!") ]
+                                [ viewOutputError (OutputError "Evaluating...") ]
 
-                            Just output ->
-                                --[ Element.row
-                                --    [ width fill
-                                --    , Element.Background.color (Element.rgb255 240 240 240)
-                                --    , Element.paddingXY (graySidePadding - 9) 0
-                                --    ]
-                                --    elements
-                                [ case transform output of
+                            Just ( output, function ) ->
+                                [ Element.row
+                                    [ width fill
+                                    , Element.Background.color (Element.rgb255 240 240 240)
+                                    , Element.paddingXY (graySidePadding - 9) 0
+                                    ]
+                                    (List.map
+                                        (viewInteractive interactives functionName)
+                                        function.pairs
+                                    )
+                                , case transform output of
                                     Ok value ->
                                         viewOutputValue value
 

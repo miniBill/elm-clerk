@@ -27,3 +27,8 @@ isEmpty (IdDict dict _) =
 map : (String -> a -> b) -> IdDict k a -> IdDict k b
 map func (IdDict dict transform) =
     IdDict (Dict.map func dict) transform
+
+
+clear : IdDict kind value -> IdDict kind v
+clear (IdDict _ transform) =
+    IdDict Dict.empty transform

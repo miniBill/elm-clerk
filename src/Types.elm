@@ -22,8 +22,8 @@ type alias FrontendModel =
     , error : String
     , fileList : List FileName
     , sections : List Section
-    , inputInteractives : Interactives
-    , evalInteractives : Interactives
+    , interactives : Interactives
+    , reloadRequests : IdDict FunctionName Int
     , functions : IdDict FunctionName Function
     , viewers : List Viewer
     , hostViewers : List HostViewer
@@ -157,7 +157,7 @@ type FrontendMsg
     | ListItemClicked FileName
     | InteractiveUpdated ( FunctionName, ParameterName ) RawInteractiveValue
     | CheckGenerateOutputs
-    | ReloadCode
+    | ReloadFunction FunctionName Int
     | Poll
     | NewScroll Float
     | NoOp
