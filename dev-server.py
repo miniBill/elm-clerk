@@ -15,9 +15,11 @@ CLEARED_CONTENTS = """
 POLL_PERIOD = 4
 
 def main():
+    print("Starting lamdera")
     my_env = os.environ.copy()
     my_env["EXPERIMENTAL"] = "1"
     process = subprocess.Popen(["lamdera", "live"], env=my_env)
+    print("Started lamdera")
 
     try:
         while True:
